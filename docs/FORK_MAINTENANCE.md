@@ -3,6 +3,8 @@
 本仓库是 `https://github.com/chris199502/jiangshan-map.git`，上游为 `https://github.com/DeanChensj/jiangshan-map.git`。
 服务器目录为 `/opt/project/jiangshan-map`，使用 `main` 分支维护上游代码和本仓库的 DIY 提交。上游同步由维护者手动执行。
 
+**提交边界：只向用户自己的 fork（`origin`）推送提交。`upstream` 仅用于拉取并合并上游更新，禁止向上游推送、创建以上游为目标的 PR，或以其他方式向上游提交修改。** 后续 AI 必须遵守此规则。
+
 ## 必须保留的 DIY 功能
 
 功能提交：`a429b49`（`feat(timeline): show years ago below the selected year`）。
