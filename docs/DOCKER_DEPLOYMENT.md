@@ -114,6 +114,6 @@ docker compose down
 
 这只停止本项目容器和网络。若要下线域名，从 `/srv/caddy/Caddyfile` 中移除这一个域名对应的 HTTPS 与 HTTP 块，验证后热重载，再移除本项目的 DNS 记录。不要操作其他容器或删除 Docker volumes。
 
-Caddy 配置修改失败时，在本次修改后尚无其他配置变更的前提下，可用本次备份恢复原文件内容，并重新 validate/reload；若其间其他站点已有修改，只撤销本项目站点块，不整文件恢复。本站初次部署前的服务器备份为 `/srv/caddy/Caddyfile.before-jiangshan-20261030`。
+Caddy 配置修改失败时，在本次修改后尚无其他配置变更的前提下，可用本次备份恢复原文件内容，并重新 validate/reload；若其间其他站点已有修改，只撤销本项目站点块，不整文件恢复。初次部署的回滚备份已按维护者要求清理；后续修改前需重新创建备份。
 
 代码回退使用 `git revert` 创建回退提交，推送后重新拉取并创建网页容器；不要 `reset --hard upstream/main`，以免丢失 DIY 功能和部署文件。
