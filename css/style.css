@@ -2655,7 +2655,7 @@ h2 {
 
 #scrubber-rail-wrap {
   position: relative;
-  padding-top: 22px;
+  padding-top: 44px;
   min-width: 0;
 }
 
@@ -2672,6 +2672,14 @@ h2 {
   white-space: nowrap;
   pointer-events: none;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+#bubble-years-ago {
+  display: block;
+  text-align: center;
+  font-size: 11px;
+  line-height: 16px;
+  color: #e3dac8;
 }
 
 #scrubber-Bubble::after {
@@ -3181,7 +3189,7 @@ html[lang="en"] .genealogy-list li {
   /* Windy-style 2-row mobile timeline: Row 1 [Play][Speed] + Era Badge + [‹][›], Row 2 100% full-width scrubber */
   #scrubber-dock {
     grid-template-columns: auto 1fr auto;
-    grid-template-rows: 28px auto;
+    grid-template-rows: 50px auto;
     row-gap: 7px;
     column-gap: 6px;
     padding: 8px 10px calc(9px + env(safe-area-inset-bottom, 0px));
@@ -3232,7 +3240,7 @@ html[lang="en"] .genealogy-list li {
     height: 28px;
   }
   #scrubber-Bubble {
-    top: -32px;
+    top: -54px;
     left: 70px !important;
     right: 58px !important;
     width: fit-content;

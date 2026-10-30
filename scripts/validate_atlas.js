@@ -5099,7 +5099,7 @@ function main() {
       'index.html must include #act-play-speed and #lbl-play-speed inside .playback-controls-group in #scrubber-dock'
     );
     assert(
-      styleCss.includes('grid-template-rows: 28px auto;') &&
+      styleCss.includes('grid-template-rows: 50px auto;') &&
         styleCss.includes('grid-column: 1 / -1;'),
       'style.css must define 2-row mobile timeline layout with full-width #scrubber-rail-wrap under @media (max-width: 640px)'
     );

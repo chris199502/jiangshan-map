@@ -1164,6 +1164,14 @@
       return compact ? `${n}` : `公元 ${n} 年`;
     }
 
+    formatYearsAgo(y) {
+      const year = Math.round(y);
+      // Historical BCE years are negative; there is no year zero.
+      const years = new Date().getFullYear() - year - (year < 0 ? 1 : 0);
+      if (this.locale === 'en') return `${years} ${years === 1 ? 'year' : 'years'} ago`;
+      return `距今 ${years} 年`;
+    }
+
     formatSpan(d) {
       if (d && d.key === 'prc') {
         return `${this.formatYear(d.fromYear, true)} —`;
@@ -8118,6 +8126,8 @@
         }
         const eraText = `${this.formatYear(this.year)} · ${this.formatEraLabel(this.year, d)}`;
         bubbleText.textContent = eraText;
+        const yearsAgo = this._id('bubble-years-ago');
+        if (yearsAgo) yearsAgo.textContent = this.formatYearsAgo(this.year);
         if (this.year >= 1368 && this.year < 1912) {
           const sp = this._resolveEraSpan(this.year, d);
           const templeZh = sp && sp[3];

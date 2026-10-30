@@ -1,0 +1,24 @@
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const sandbox = { window: { addEventListener() {} } };
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/app.js'), 'utf8'), sandbox);
+const ctrl = Object.create(sandbox.window.HistoricalAtlasController.prototype);
+ctrl.locale = 'zh';
+const now = new Date().getFullYear();
+assert.equal(typeof ctrl.formatYearsAgo, 'function', 'The timeline must format years ago');
+assert.equal(ctrl.formatYearsAgo(1415), `距今 ${now - 1415} 年`);
+assert.equal(ctrl.formatYearsAgo(-221), `距今 ${now + 220} 年`);
+assert.equal(ctrl.formatYearsAgo(-1), `距今 ${now} 年`, 'There is no year zero');
+assert.equal(ctrl.formatYearsAgo(1), `距今 ${now - 1} 年`);
+assert.equal(ctrl.formatYearsAgo(now), '距今 0 年');
+ctrl.locale = 'en';
+assert.equal(ctrl.formatYearsAgo(now - 1), '1 year ago');
+assert.equal(ctrl.formatYearsAgo(1415), `${now - 1415} years ago`);
+ctrl.locale = 'zh-tw';
+assert.equal(ctrl.formatYearsAgo(1415), `距今 ${now - 1415} 年`);
+console.log('Years-ago checks passed (CE, BCE, current year, Chinese and English).');

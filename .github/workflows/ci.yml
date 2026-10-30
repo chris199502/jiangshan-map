@@ -21,3 +21,6 @@ jobs:
 
       - name: Run Atlas Validation Suite
         run: node scripts/validate_atlas.js
+
+      - name: Check custom years-ago display
+        run: node scripts/validate_years_ago.cjs
