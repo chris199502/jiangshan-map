@@ -28,6 +28,8 @@
 
 不修改历史数据，不增加运行时依赖，也不设置自动同步任务。
 
+Docker 部署见 [DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md)。合并上游时也须保留本仓库的 `compose.yaml`、`deploy/` 和该部署文档；部署后只重新创建本项目网页容器，不覆盖服务器现有 Caddy 配置。
+
 ## 手动同步上游
 
 开发和验证环境需要 Node.js 20+、Python 3，并且完整校验使用的 `python3` 命令必须可用。服务器克隆时没有预装 Node.js，本次验证使用临时 Node.js 22；后续维护需自行准备 Node.js。静态网页运行无需 Node.js 或构建。

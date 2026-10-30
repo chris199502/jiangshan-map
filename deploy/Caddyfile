@@ -1,0 +1,8 @@
+history.sensor.dpdns.org {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:18766
+}
+
+http://history.sensor.dpdns.org {
+    redir https://history.sensor.dpdns.org{uri} permanent
+}
