@@ -1,83 +1,74 @@
-# Docker + 现有 Caddy 部署
+# 通过现有 Caddy 直接部署
 
-目标地址：`https://history.sensor.dpdns.org`，通过 Cloudflare 橙云代理访问。源站服务器：`95.181.188.86`；项目目录：`/opt/project/jiangshan-map`。
+站点地址：`https://history.sensor.dpdns.org`；服务器：`95.181.188.86`；项目目录：`/opt/project/jiangshan-map`。
 
-这是纯静态网页，无需 npm 安装或构建。`compose.yaml` 使用官方 `nginx:stable-alpine` 镜像，站点文件只读挂载到容器，监听 `127.0.0.1:18766`。现有 Caddy 负责公网 HTTPS、压缩和证书续期。
+这是纯静态网页，无需 npm 安装或构建。现有共享 Caddy 容器直接读取网页文件，负责 HTTPS、压缩和证书续期。已移除独立 Nginx 容器、`nginx:stable-alpine` 镜像、旧项目 Compose 文件和 `deploy/nginx.conf`；不再使用本机端口 `18766`。
 
-只挂载需要公开的网页资源，没有将整个 Git 仓库作为网站根目录，因此 `.git`、维护文档和部署配置不对外提供。Docker 不保存业务数据。
+## 部署文件与公开范围
 
-## 1. 准备代码与启动容器
+- `/srv/caddy/compose.yaml` 管理服务器现有的共享 Caddy 容器。
+- `deploy/caddy-mount.yaml` 是本项目所需的只读挂载片段，须合并到现有 `caddy` 服务，不能单独启动。
+- `deploy/Caddyfile` 只包含本项目的 HTTPS 和 HTTP 站点块，不能覆盖服务器完整 Caddyfile。
 
-在 Windows PowerShell 登录：
+仓库目录整体只读挂载到容器内 `/srv/jiangshan-map`，以便 Git 更新文件后直接生效。Caddy 的 `@public` 白名单只公开首页、`assets/`、`css/`、`js/`、`topics/`、`geojson/`，以及 manifest、robots、sitemap、llms 和 LICENSE。其他路径返回 404；`file_server` 还明确隐藏 `.git`、`.github`、文档、脚本、部署文件及技能目录。维护文件仍可由服务器使用，但不能通过网站下载。
+
+新增网页资源目录时，先确认其内容可公开，再更新站点白名单；不要删除白名单或改为公开整个仓库。迁移已验证全部 69 个公开文件与旧站内容一致，并验证私有路径和编码后的路径穿越请求被阻止。
+
+## 首次接入现有 Caddy
+
+在 Windows PowerShell 登录服务器：
 
 ```powershell
-ssh -i "$env:USERPROFILE\.ssh\id_ed25519" root@95.181.188.86
+ssh mega
 ```
 
-以下命令在 Linux 服务器执行，需要 Docker Engine 和 Docker Compose 插件：
+以下命令在 Linux 服务器执行。先确认项目已经克隆到上述路径、工作区干净，且 `/srv/caddy/compose.yaml` 是现有共享 Caddy 的配置：
 
 ```sh
 cd /opt/project/jiangshan-map
 git status --short
 git pull --ff-only origin main
-ss -ltnp | grep ':18766' || true
-docker compose config --quiet
-docker compose pull
-docker compose up -d
-docker compose exec -T web nginx -t
-curl -I http://127.0.0.1:18766/
-docker compose ps
+test -f index.html
+test -d assets
 ```
 
-先确认工作区干净；如果端口已被其他服务占用，停止并检查，不要结束不明进程。本项目自己的容器已占用该端口时，直接运行 `docker compose up -d` 即可更新配置。
-每条命令成功后才继续。首页预期返回 HTTP 200。没有 Node.js 也能部署；修改源码和同步上游时的测试环境要求见 [FORK_MAINTENANCE.md](FORK_MAINTENANCE.md)。
+将 `deploy/caddy-mount.yaml` 中的 volume 合并到 `/srv/caddy/compose.yaml` 的现有 `caddy` 服务，保留其镜像、网络、证书及配置挂载。该挂载使用 `create_host_path: false`；源目录缺失时应报错，不自动创建空目录。
 
-## 2. Cloudflare DNS
+先检查 `/srv/caddy/Caddyfile` 是否已有 `history.sensor.dpdns.org`：若已有，只更新本项目的 HTTPS/HTTP 块；若没有，才追加 `deploy/Caddyfile` 的内容。保留所有其他域名、全局配置和证书。当前全局禁用了自动 HTTP 重定向，因此片段保留显式 HTTP → HTTPS 重定向。
 
-在 `sensor.dpdns.org` 区域添加：
+修改单文件挂载的 Caddyfile 时原地写入，保留 inode；不要用替换文件的方式使容器继续读取旧文件。修改前暂存需要回退的配置，验收成功后清理本次备份。
+
+新增挂载需要重建共享 Caddy，会短暂中断其他站点连接。安排好切换时间后执行：
+
+```sh
+docker compose -f /srv/caddy/compose.yaml config --quiet
+docker exec caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker compose -f /srv/caddy/compose.yaml up -d --no-deps --force-recreate caddy
+```
+
+如果只修改站点配置而未改变挂载，验证后热重载即可：
+
+```sh
+docker exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
+保留 `/srv/caddy/data` 和 `/srv/caddy/config`。不要创建第二个占用 80/443 的 Caddy，不要停止整个共享栈或删除其他服务的 volumes。
+
+## Cloudflare DNS
+
+在 `sensor.dpdns.org` 区域保留以下记录：
 
 | 字段 | 值 |
 | --- | --- |
 | 类型 | `A` |
 | 名称 | `history` |
 | IPv4 | `95.181.188.86` |
-| 代理状态 | Proxied（橙云，开启小云朵） |
+| 代理状态 | Proxied（橙云开启） |
 | TTL | Auto |
 
-保持橙云开启；公开 DNS 应解析到 Cloudflare 边缘 IP，用户访问经 Cloudflare 回源到 Caddy。若同名已有 A、AAAA、CNAME 或 NS 记录，先确认用途，不要盲目覆盖或追加指向其他主机的记录。
-该子域名需要有效的 Cloudflare 边缘证书，Caddy 提供有效的源站证书。当前区域原有 SSL 模式为 Full，本次保留该设置，已验证两段 HTTPS 和源站证书有效；Full 模式本身不校验源站证书。若需让 Cloudflare 严格校验证书，使用只匹配此域名的 Configuration Rule 设置为 Full (strict)，避免影响其他站点。不要使用 Flexible，否则显式 HTTP → HTTPS 重定向可能循环。
+同名已有其他记录时先确认用途，不要盲目覆盖。保留现有区域 SSL 设置；Cloudflare 与源站之间应使用 HTTPS，不能使用会导致重定向循环的 Flexible 模式。Caddy 自动申请和续期源站证书。
 
-## 3. 接入现有 Caddy
-
-本服务器的 Caddy 容器名是 `caddy`，使用 host 网络；宿主机 `/srv/caddy/Caddyfile` 只读挂载到容器 `/etc/caddy/Caddyfile`。因此它可以直接反向代理本机 `127.0.0.1:18766`。
-
-仓库内 `deploy/Caddyfile` **只是这个站点的配置片段**，不能用它替换服务器完整配置。当前全局设置禁用了自动 HTTP 重定向，因此片段中同时包含显式 HTTP 重定向。
-
-首次安装时先确认还没有此站点块，再备份并追加；不要重复追加：
-
-```sh
-grep -n 'history.sensor.dpdns.org' /srv/caddy/Caddyfile
-# 若已有匹配，检查或更新原站点块，跳过下面的 cat 追加。
-cp -p /srv/caddy/Caddyfile /srv/caddy/Caddyfile.before-history-$(date +%Y%m%d-%H%M%S)
-cat deploy/Caddyfile >> /srv/caddy/Caddyfile
-docker exec caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-```
-
-验证成功后才热重载，其他站点继续由同一 Caddy 容器服务：
-
-```sh
-docker exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
-```
-
-DNS 生效且公网 TCP 80/443 可达后，Caddy 会自动申请并续期证书。首次证书申请可能需要等待；排查最近日志：
-
-```sh
-docker logs --since 10m caddy
-```
-
-已有 Caddy 数据目录 `/srv/caddy/data` 和配置目录 `/srv/caddy/config` 应保留，不要新建第二个占用 80/443 的 Caddy，也不要删除已有证书数据。
-
-## 4. 验证部署
+## 验证部署
 
 ```sh
 curl -I http://history.sensor.dpdns.org/
@@ -85,35 +76,28 @@ curl -I https://history.sensor.dpdns.org/
 curl -I https://history.sensor.dpdns.org/js/app.js
 curl -I https://history.sensor.dpdns.org/.git/config
 curl -I https://history.sensor.dpdns.org/docs/FORK_MAINTENANCE.md
+curl -I https://history.sensor.dpdns.org/deploy/caddy-mount.yaml
 ```
 
-预期：HTTP 跳转 HTTPS；HTTPS 首页和 JS 返回 200，TLS 证书校验成功；`.git` 和维护文档返回 404。
-浏览器访问 `https://history.sensor.dpdns.org/?year=1415`，检查地图、时间轴、人物跳转和“距今 N 年”；手机检查 320px、390px 宽度，气泡不能被轴线遮挡。
+预期：HTTP 跳转 HTTPS；首页和 JS 返回 200，TLS 校验成功；Git 配置、维护文档和部署文件返回 404。用 `curl --path-as-is` 检查 `/css/%2e%2e/AGENTS.md` 等请求也不能下载私有文件。需要排查时检查 `docker logs --since 10m caddy`。
 
-## 5. 日常更新
+访问 `https://history.sensor.dpdns.org/?year=1415`，确认地图、时间轴、人物跳转及“距今 N 年”正常；移动端检查 320px、390px 宽度。涉及 JS/CSS 修改时仍须遵守维护文档中的完整回归要求。
 
-同步上游请先按 [FORK_MAINTENANCE.md](FORK_MAINTENANCE.md) 合并、保留 DIY 并通过测试，再部署已提交的代码：
+## 日常更新
+
+先按 [FORK_MAINTENANCE.md](FORK_MAINTENANCE.md) 手动合并上游、保留 DIY 功能并完成相应测试。部署已提交的代码：
 
 ```sh
 cd /opt/project/jiangshan-map
 git status --short
 git pull --ff-only origin main
-docker compose up -d --force-recreate
 curl -I https://history.sensor.dpdns.org/
 ```
 
-单独挂载的 `index.html` 等文件可能在 Git 更新时更换 inode，因此拉取代码后重新创建本项目容器，确保所有挂载都指向新版本。无需重启 Caddy。浏览器如显示旧版本，强制刷新。
-升级 nginx 镜像时先执行 `docker compose pull`，再运行上面的重新创建和访问检查；该镜像标签会随官方稳定版更新，不会自动升级运行中的容器。
+只读目录挂载会直接读取更新后的文件；仅更新网页内容无需重建或重载 Caddy，也没有 Node.js 运行时或独立网页容器需要维护。浏览器缓存仍可能需要强制刷新。若修改了 `deploy/Caddyfile`，须同步更新共享 Caddyfile 中本项目的对应块，再验证并热重载；修改挂载则需要重建共享 Caddy。
 
-## 6. 停止与回退
+## 下线与回退
 
-```sh
-cd /opt/project/jiangshan-map
-docker compose down
-```
+下线时只删除本项目的 HTTPS/HTTP 站点块，验证后热重载。再从共享 Compose 中移除 `/srv/jiangshan-map` 这一处挂载，重建 Caddy，确认没有其他用途后删除本项目 DNS、证书缓存及项目目录。不要对共享 Caddy 执行 `docker compose down`。
 
-这只停止本项目容器和网络。若要下线域名，从 `/srv/caddy/Caddyfile` 中移除这一个域名对应的 HTTPS 与 HTTP 块，验证后热重载，再移除本项目的 DNS 记录。不要操作其他容器或删除 Docker volumes。
-
-Caddy 配置修改失败时，在本次修改后尚无其他配置变更的前提下，可用本次备份恢复原文件内容，并重新 validate/reload；若其间其他站点已有修改，只撤销本项目站点块，不整文件恢复。初次部署的回滚备份已按维护者要求清理；后续修改前需重新创建备份。
-
-代码回退使用 `git revert` 创建回退提交，推送后重新拉取并创建网页容器；不要 `reset --hard upstream/main`，以免丢失 DIY 功能和部署文件。
+配置验证失败时只回退本次修改；若其他配置已同时变化，不整文件恢复。正常网页代码回退使用 `git revert` 创建回退提交，再拉取已提交代码。不要 `reset --hard upstream/main`，也不要重新引入已退役的 Nginx 部署。验收完成后清理本次临时文件和备份。

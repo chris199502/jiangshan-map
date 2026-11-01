@@ -30,7 +30,7 @@
 
 不修改历史数据，不增加运行时依赖，也不设置自动同步任务。
 
-Docker 部署见 [DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md)。合并上游时也须保留本仓库的 `compose.yaml`、`deploy/` 和该部署文档；部署后只重新创建本项目网页容器，不覆盖服务器现有 Caddy 配置。
+通过现有 Caddy 直接部署见 [DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md)。合并上游时须保留 `deploy/Caddyfile`、`deploy/caddy-mount.yaml`、公开路径白名单和该部署文档。站点由共享 Caddy 容器直接提供静态文件，已移除独立 Nginx 容器及原 `compose.yaml`、`deploy/nginx.conf`；不要在同步上游时恢复旧部署。仅更新网页资源时无需重建或重载 Caddy，不覆盖服务器其他站点配置。
 
 ## 手动同步上游
 

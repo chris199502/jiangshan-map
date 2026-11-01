@@ -1,0 +1,10 @@
+# Merge this mount into the existing caddy service; this is not a standalone stack.
+services:
+  caddy:
+    volumes:
+      - type: bind
+        source: /opt/project/jiangshan-map
+        target: /srv/jiangshan-map
+        read_only: true
+        bind:
+          create_host_path: false

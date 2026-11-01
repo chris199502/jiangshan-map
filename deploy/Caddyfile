@@ -1,6 +1,15 @@
 history.sensor.dpdns.org {
     encode zstd gzip
-    reverse_proxy 127.0.0.1:18766
+    root * /srv/jiangshan-map
+    @public path / /index.html /manifest.webmanifest /robots.txt /sitemap.xml /llms.txt /LICENSE /assets /assets/* /css /css/* /js /js/* /topics /topics/* /geojson /geojson/*
+    handle @public {
+        file_server {
+            hide .git .github docs scripts deploy skills compose.yaml AGENTS.md README.md README_ZH.md CONTRIBUTING.md CONTRIBUTING_ZH.md
+        }
+    }
+    handle {
+        respond "Not Found" 404
+    }
 }
 
 http://history.sensor.dpdns.org {
