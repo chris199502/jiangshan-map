@@ -11,6 +11,16 @@
 *The story behind it (in Chinese): [From textbook maps to 1k GitHub stars](https://deanchen.me/history/atlas/2026/10/25/jiangshan-map-story.html)*
 
 <p align="center">
+  <a href="https://www.star-history.com/deanchensj/jiangshan-map">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=deanchensj/jiangshan-map&type=trending&theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/badge?repo=deanchensj/jiangshan-map&type=trending" />
+      <img alt="GitHub Trending · Repository of the Day #2" src="https://api.star-history.com/badge?repo=deanchensj/jiangshan-map&type=trending" height="56" />
+    </picture>
+  </a>
+</p>
+
+<p align="center">
   <a href="https://deanchen.me/jiangshan-map/?lang=en">
     <img src="assets/hero_demo_en.webp" alt="Chronicles of the Realm — 15s Interactive Overview (Warring States Unification, 2,400-Year Dynastic Scrubbing, Chang'an Place Genealogy & Su Shi's Exile Route)" width="100%" />
   </a>
@@ -111,6 +121,33 @@ Append query parameters to share any historical moment, battle, city genealogy, 
 - **Start a quiz round**: [`?year=-121&quiz=locate&lang=en`](https://deanchen.me/jiangshan-map/?year=-121&quiz=locate&lang=en) (Map Pinpoint Challenge)
 - **Switch UI language**: [`?lang=en`](https://deanchen.me/jiangshan-map/?lang=en) (English) / [`?lang=zh-tw`](https://deanchen.me/jiangshan-map/?lang=zh-tw) (Traditional Chinese) / [`/`](https://deanchen.me/jiangshan-map/) (Simplified Chinese)
 
+### Embed in Your Page
+
+Put any view of the atlas into a blog post, Notion page, or course site:
+
+1. Open the atlas and set up the view you want (a year, a regime profile, a place card, or a person's trajectory). The address bar always mirrors what you see.
+2. Copy the URL and add `&embed=1`.
+3. Paste it into an `<iframe>`:
+
+```html
+<iframe
+  src="https://deanchen.me/jiangshan-map/?embed=1&year=1104&trace=101.778,36.617&from=1072&to=1126&lang=en"
+  width="100%" height="480" loading="lazy" style="border:0"
+  title="Chronicles of the Realm · 1104 CE, Northern Song"></iframe>
+```
+
+The embedded map hides the site chrome and keeps only the map, a compact timeline, a title chip, an "Open in Jiangshan Atlas ↗" link, and a note that historical borders are approximate. Readers click once to start panning and zooming, so scrolling your page never gets stuck on the map.
+
+| Parameter | Effect |
+|---|---|
+| `embed=1` | Turn on embed mode (required) |
+| `year`, `polity`, `person`, `stop`, `trace`, `lang` | Same as the share links above |
+| `from=1072&to=1126` | Limit the timeline to this range; the timeline zooms to show only it |
+| `lock=1` | Freeze the map at `year` and hide the timeline |
+| `autoplay=1` | Play a person's trajectory stop by stop (with `person`), or play the timeline |
+
+WeChat Official Accounts, Zhihu, and Xiaohongshu do not allow iframes; share the plain link there instead.
+
 ---
 
 ## AI Agent, MCP & LLM Integration
@@ -182,6 +219,24 @@ python3 -m http.server 8000
 
 Then open `http://localhost:8000` in your browser.
 
+## Run with Docker
+
+No local dependency needed. Build and start with Docker Compose:
+
+```bash
+docker compose up -d --build
+```
+
+Then open `http://localhost:8008` (the port mapping `8008:80` is set in `docker-compose.yml`).
+
+The image is a plain `nginx:alpine` that serves this repository as static files: `Dockerfile` copies the working tree into `/usr/share/nginx/html`, and `.dockerignore` keeps the build context small by excluding `.git`, `.github`, `data/`, `docs/`, `scripts/`, `skills/`, Markdown files and `geojson/demo.html` — the site does not need any of them at runtime.
+
+To use another port, change the `ports` mapping in `docker-compose.yml` (e.g. `"9000:80"`) and run `docker compose up -d` again.
+
+After pulling upstream changes, rebuild with `docker compose up -d --build`. Without Compose: `docker build -t jiangshan-map:latest .` then `docker run -d -p 8008:80 --name jiangshan-map jiangshan-map:latest`.
+
+Note: the image is built locally; it is not published to any registry.
+
 ---
 
 ## GeoJSON Export (for Leaflet / MapLibre / QGIS)
@@ -206,7 +261,7 @@ hit.region.properties.title;     // 南直隶
 hit.prefecture.properties.title; // 应天府 (a GeoJSON Feature: L.geoJSON(hit.prefecture))
 ```
 
-After exporting, serve the repository (`python3 -m http.server 8000`) and open `http://localhost:8000/geojson/demo.html` for a Leaflet example: drag the year slider, click the map, or open `demo.html?year=1415&lon=118.78&lat=32.06` to load, highlight and zoom automatically. The data is GPL-3.0, and historical borders are schematic approximations.
+After exporting, serve the repository (`python3 -m http.server 8000`) and open `http://localhost:8000/geojson/demo.html` for a Leaflet example: drag the year slider, click the map, or open `demo.html?year=1415&lon=118.78&lat=32.06` to load, highlight and zoom automatically. Historical borders are schematic approximations, not surveyed boundaries. The data is GPL-3.0 except the prefecture-level boundaries noted under [Credits & License](#credits--license).
 
 ---
 
@@ -215,7 +270,8 @@ After exporting, serve the repository (`python3 -m http.server 8000`) and open `
 - **Historical GIS References**: Tan Qixiang's *The Historical Atlas of China* (谭其骧主编《中国历史地图集》), **CHGIS** (Harvard-Yenching Institute & Fudan University), **Robert M. Hartwell** historical GIS datasets, and [aourednik/historical-basemaps](https://github.com/aourednik/historical-basemaps) (GPL-3.0).
 - **Modern Provincial Reference**: DataV GeoAtlas open administrative boundary data.
 - **Classical Guqin Audio**: Wikimedia Commons public-domain recordings (*Liu Shui*, *Pingsha Luoyan*, *Yangguan Sandie*, *Zuiyu Changwan*, *Jiu Kuang*).
-- **Note**: Historical territorial contours and prefecture boundaries in this atlas are schematic approximations intended to illustrate broad historical jurisdictions rather than modern surveyed borders.
+- **Approximate boundaries**: Historical territorial contours and administrative boundaries in this atlas are schematic approximations that illustrate broad historical jurisdictions. They are not the product of scientific surveying and should not be cited as precise or authoritative borders.
+- **Attribution**: When reusing maps, screenshots or data from this project, please credit **江山时序 Jiangshan Atlas** with a link to https://github.com/DeanChensj/jiangshan-map, and cite the upstream sources listed above.
 - **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md) ([中文贡献指南](CONTRIBUTING_ZH.md)) for repository structure, data conventions, and validation checks.
 - **License**: Released under **GPL-3.0** (see [LICENSE](LICENSE)). Copyright © 2026 DeanChensj.
-  - **Exception**: Prefecture-level boundaries and Warring States territories derived from CHGIS V6 and the Hartwell China Historical GIS remain subject to their original terms (academic, non-commercial use only) and are not relicensed under GPL-3.0.
+  - **Exception**: Prefecture-level boundaries (commanderies, prefectures and superior prefectures, i.e. 郡 / 州 / 府, including the Warring States and Qin commanderies) derived from CHGIS V6 and the Hartwell China Historical GIS remain subject to their original terms (academic, non-commercial use only) and are not relicensed under GPL-3.0. See [data/atlas/README.md](data/atlas/README.md) for provenance and citation.

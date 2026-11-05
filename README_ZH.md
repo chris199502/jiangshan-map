@@ -11,6 +11,16 @@
 *作者自述：[从历史课本里的插图，到 GitHub 1k star：「江山时序」背后的故事](https://deanchen.me/history/atlas/2026/10/25/jiangshan-map-story.html)*
 
 <p align="center">
+  <a href="https://www.star-history.com/deanchensj/jiangshan-map">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=deanchensj/jiangshan-map&type=trending&theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/badge?repo=deanchensj/jiangshan-map&type=trending" />
+      <img alt="GitHub Trending 每日项目第 2 名" src="https://api.star-history.com/badge?repo=deanchensj/jiangshan-map&type=trending" height="56" />
+    </picture>
+  </a>
+</p>
+
+<p align="center">
   <a href="https://deanchen.me/jiangshan-map/">
     <img src="assets/hero_demo_zh.webp" alt="江山时序 15 秒实机演示：秦扫六合、两千年疆域流转、长安十八朝沿革与苏东坡贬谪行迹" width="100%" />
   </a>
@@ -111,6 +121,33 @@
 - **直接开一局挑战**：[`?year=-121&quiz=locate`](https://deanchen.me/jiangshan-map/?year=-121&quiz=locate)（舆图寻址挑战）
 - **切换繁简与英文界面**：[`?lang=zh-tw`](https://deanchen.me/jiangshan-map/?lang=zh-tw)（繁体中文） / [`?lang=en`](https://deanchen.me/jiangshan-map/?lang=en)（英文版）
 
+### 嵌入到你的网页
+
+把地图的任意画面放进博客文章、Notion 页面或课程网站：
+
+1. 打开江山时序，调到你想展示的画面（某一年、某个政权档案、某个地点卡片或某个人物的轨迹）。地址栏会实时反映当前画面。
+2. 复制网址，在后面加上 `&embed=1`。
+3. 放进 `<iframe>`：
+
+```html
+<iframe
+  src="https://deanchen.me/jiangshan-map/?embed=1&year=1104&trace=101.778,36.617&from=1072&to=1126"
+  width="100%" height="480" loading="lazy" style="border:0"
+  title="江山时序 · 公元1104年 北宋"></iframe>
+```
+
+嵌入后的地图会隐藏网站的导航和侧栏，只保留地图、精简时间轴、左上角的标题牌、右上角的「在江山时序中打开 ↗」链接，以及「历史疆域为示意性近似」的说明。读者需要先点一下地图才能拖动和缩放，滚动文章时不会被地图卡住。
+
+| 参数 | 作用 |
+|---|---|
+| `embed=1` | 开启嵌入模式（必填） |
+| `year`、`polity`、`person`、`stop`、`trace`、`lang` | 和上面的分享链接相同 |
+| `from=1072&to=1126` | 把时间轴限定在这个范围，时间轴会放大到只显示这一段 |
+| `lock=1` | 把地图固定在 `year` 指定的年份，并隐藏时间轴 |
+| `autoplay=1` | 自动逐站播放人物轨迹（配合 `person`），或自动播放时间轴 |
+
+微信公众号、知乎、小红书不支持网页嵌入，在这些平台请直接分享链接。
+
 ---
 
 ## AI Agent、MCP & LLM 接入指南
@@ -182,6 +219,24 @@ python3 -m http.server 8000
 
 随后在浏览器打开 `http://localhost:8000`。
 
+## 使用 Docker 运行
+
+无需本地依赖，用 Docker Compose 一条命令构建并启动：
+
+```bash
+docker compose up -d --build
+```
+
+随后在浏览器打开 `http://localhost:8008`（端口映射为 `docker-compose.yml` 中的 `8008:80`）。
+
+镜像基于 `nginx:alpine` 做静态托管：`Dockerfile` 把整个仓库复制到 `/usr/share/nginx/html`；`.dockerignore` 排除 `.git`、`.github`、`data/`、`docs/`、`scripts/`、`skills/`、Markdown 文件与 `geojson/demo.html`，以减小构建上下文，页面运行不依赖这些内容。
+
+要换端口：修改 `docker-compose.yml` 的 `ports`（如 `"9000:80"`），再执行 `docker compose up -d`。
+
+拉取上游更新后重新构建：`docker compose up -d --build`。不用 Compose 时：`docker build -t jiangshan-map:latest .`，再 `docker run -d -p 8008:80 --name jiangshan-map jiangshan-map:latest`。
+
+说明：镜像在本地构建，未发布到任何镜像仓库。
+
 ---
 
 ## GeoJSON 导出（供 Leaflet / MapLibre / QGIS 使用）
@@ -206,7 +261,7 @@ hit.region.properties.title;     // 南直隶
 hit.prefecture.properties.title; // 应天府（本身是 GeoJSON Feature，可直接 L.geoJSON(hit.prefecture)）
 ```
 
-导出后启动本地服务（`python3 -m http.server 8000`），打开 `http://localhost:8000/geojson/demo.html` 即可查看 Leaflet 示例：拖动年份滑块、点击地图，或打开 `demo.html?year=1415&lon=118.78&lat=32.06` 自动加载、高亮并缩放到该处。数据采用 GPL-3.0 协议，历史疆域为示意性近似。
+导出后启动本地服务（`python3 -m http.server 8000`），打开 `http://localhost:8000/geojson/demo.html` 即可查看 Leaflet 示例：拖动年份滑块、点击地图，或打开 `demo.html?year=1415&lon=118.78&lat=32.06` 自动加载、高亮并缩放到该处。历史疆域为示意性近似，并非测绘边界。数据采用 GPL-3.0 协议，但「致谢与许可」中注明的郡 / 州 / 府级边界除外。
 
 ---
 
@@ -215,7 +270,8 @@ hit.prefecture.properties.title; // 应天府（本身是 GeoJSON Feature，可�
 - **历史疆域与政区参考**：谭其骧主编《中国历史地图集》、**CHGIS**（哈佛燕京学社与复旦大学中国历史地理信息系统）、**Robert M. Hartwell** 历史 GIS 数据集，以及 [aourednik/historical-basemaps](https://github.com/aourednik/historical-basemaps)（GPL-3.0）。
 - **现代省界参考**：DataV GeoAtlas 开放行政边界数据。
 - **古琴雅乐录音**：Wikimedia Commons 公有领域古琴录音（《流水》《平沙落雁》《阳关三叠》《醉渔唱晚》《酒狂》）。
-- **说明**：地图中的历史疆域轮廓与州郡政区边界为示意性近似，旨在直观呈现各时期大致统治与管辖范围，非精确现代测绘边界。
+- **近似边界**：地图中的历史疆域轮廓与政区边界为示意性近似，旨在直观呈现各时期大致的统治与管辖范围，并非科学测绘成果，请勿作为精确或权威的边界依据引用。
+- **转载请注明出处**：转载或引用本项目的地图、截图或数据时，请注明「江山时序 Jiangshan Atlas」并附上 https://github.com/DeanChensj/jiangshan-map ，同时注明上文所列的原始数据来源。
 - **参与贡献**：参见 [中文贡献指南 (`CONTRIBUTING_ZH.md`)](CONTRIBUTING_ZH.md)（[English Contributing Guide](CONTRIBUTING.md)）了解项目结构、史料校勘规范与自动化校验流程。
 - **开源协议**：采用 **GPL-3.0**（见 [LICENSE](LICENSE)）。Copyright © 2026 DeanChensj。
-  - **例外**：源自 CHGIS V6 与 Hartwell China Historical GIS 的府州郡政区边界及战国疆域数据，仍受其原始条款约束（仅限学术、非商业用途），不适用 GPL-3.0。
+  - **例外**：源自 CHGIS V6 与 Hartwell China Historical GIS 的郡 / 州 / 府级政区边界（含战国与秦的郡），仍受其原始条款约束（仅限学术、非商业用途），不适用 GPL-3.0。数据来源与引用格式见 [data/atlas/README.md](data/atlas/README.md)。

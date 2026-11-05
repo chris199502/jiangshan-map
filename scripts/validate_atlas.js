@@ -25,6 +25,194 @@ if (CLI_ARGS.has('--help') || CLI_ARGS.has('-h')) {
 }
 const FAST_MODE = CLI_ARGS.has('--fast') || CLI_ARGS.has('-f');
 
+// Frozen copy of _buildRegionBoundaryPath before #255 added edge bins and point
+// caches. The equivalence check below proves the optimized version draws the same
+// paths and anchors. If you change the boundary rules on purpose, delete this
+// function and that check rather than editing both.
+function buildRegionBoundaryReference(snap) {
+  if (!snap || snap._skipRegionBoundaryStroke || !Array.isArray(snap.regions) || !snap.regions.length) {
+    return '';
+  }
+  if (snap._cachedRegionBoundaryPath !== undefined) {
+    return snap._cachedRegionBoundaryPath;
+  }
+
+  const polRings = [];
+  const polList = snap.polities || [];
+  const polAreas = polList.map(() => 0);
+  for (let pIdx = 0; pIdx < polList.length; pIdx++) {
+    const pol = polList[pIdx];
+    if (!pol || pol.role === 'neighbor' || !pol.shape) continue;
+    const coords = pol.shape.coordinates;
+    const polys = pol.shape.type === 'Polygon' ? [coords] : coords || [];
+    for (const poly of polys) {
+      const ring = poly && poly[0];
+      if (!ring || ring.length < 3) continue;
+      let minX = Infinity,
+        maxX = -Infinity,
+        minY = Infinity,
+        maxY = -Infinity;
+      let area2 = 0;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const x = ring[i][0],
+          y = ring[i][1];
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        area2 += ring[j][0] * y - x * ring[j][1];
+      }
+      polAreas[pIdx] += Math.abs(area2) * 0.5;
+      polRings.push({ pIdx, minX, maxX, minY, maxY, ring });
+    }
+  }
+  const allCommanderyRegions = snap.regions.every(
+    (r) => r && r.title && (r.title.endsWith('郡') || r.title.includes('内史'))
+  );
+  const hasLargePolity = !allCommanderyRegions && polAreas.some((a) => a >= 35);
+  const isMultiRegime = !allCommanderyRegions && polList.filter((p) => p && p.role !== 'neighbor').length >= 4;
+  const findPolIdx = (x, y) => {
+    for (let rIdx = 0; rIdx < polRings.length; rIdx++) {
+      const b = polRings[rIdx];
+      if (x < b.minX || x > b.maxX || y < b.minY || y > b.maxY) continue;
+      const ring = b.ring;
+      let inside = false;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const xi = ring[i][0],
+          yi = ring[i][1];
+        const xj = ring[j][0],
+          yj = ring[j][1];
+        if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
+          inside = !inside;
+        }
+      }
+      if (inside) return b.pIdx;
+    }
+    return -1;
+  };
+  const allowPolIdx = (pIdx) => {
+    if (pIdx < 0) return false;
+    const pol = polList[pIdx];
+    if (!pol) return false;
+    if (hasLargePolity && pol.role === 'rival' && polAreas[pIdx] < 35) return false;
+    return true;
+  };
+  const nearPolityBorder = (x, y, margin) => {
+    const m2 = margin * margin;
+    for (let rIdx = 0; rIdx < polRings.length; rIdx++) {
+      const b = polRings[rIdx];
+      if (
+        x < b.minX - margin ||
+        x > b.maxX + margin ||
+        y < b.minY - margin ||
+        y > b.maxY + margin
+      ) {
+        continue;
+      }
+      const ring = b.ring;
+      for (let i = 0; i < ring.length - 1; i++) {
+        const x1 = ring[i][0],
+          y1 = ring[i][1];
+        const x2 = ring[i + 1][0],
+          y2 = ring[i + 1][1];
+        const dx = x2 - x1,
+          dy = y2 - y1;
+        const len2 = dx * dx + dy * dy;
+        let t = len2 > 1e-12 ? ((x - x1) * dx + (y - y1) * dy) / len2 : 0;
+        if (t < 0) t = 0;
+        else if (t > 1) t = 1;
+        const px = x1 + t * dx - x,
+          py = y1 + t * dy - y;
+        if (px * px + py * py < m2) return true;
+      }
+    }
+    return false;
+  };
+  Object.defineProperty(snap, '_allowRegionAnchor', {
+    value: (x, y) => !polRings.length || allowPolIdx(findPolIdx(x, y)),
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
+  const ptKey = (pt) => `${pt[0].toFixed(2)},${pt[1].toFixed(2)}`;
+  const edgeKey = (p1, p2) => {
+    const k1 = ptKey(p1);
+    const k2 = ptKey(p2);
+    return k1 < k2 ? `${k1}|${k2}` : `${k2}|${k1}`;
+  };
+
+  const allRings = [];
+  const regEdgeCounts = new Map();
+  for (const reg of snap.regions) {
+    if (!reg || !reg.shape) continue;
+    const coords = reg.shape.coordinates;
+    const polys = reg.shape.type === 'Polygon' ? [coords] : coords || [];
+    for (const poly of polys) {
+      for (const ring of poly || []) {
+        if (!ring || ring.length < 2) continue;
+        allRings.push(ring);
+        for (let i = 0; i < ring.length - 1; i++) {
+          const ek = edgeKey(ring[i], ring[i + 1]);
+          regEdgeCounts.set(ek, (regEdgeCounts.get(ek) || 0) + 1);
+        }
+      }
+    }
+  }
+
+  const seenEdges = new Set();
+  let d = '';
+  for (const ring of allRings) {
+    let penX = NaN;
+    let penY = NaN;
+    for (let i = 0; i < ring.length - 1; i++) {
+      const p1 = ring[i];
+      const p2 = ring[i + 1];
+      const ek = edgeKey(p1, p2);
+      if ((regEdgeCounts.get(ek) || 0) < 2 || seenEdges.has(ek)) {
+        penX = NaN;
+        penY = NaN;
+        continue;
+      }
+      const mx = (p1[0] + p2[0]) * 0.5;
+      const my = (p1[1] + p2[1]) * 0.5;
+      const pIdxM = polRings.length ? findPolIdx(mx, my) : 0;
+      const borderMargin = isMultiRegime ? 0.55 : 0.16;
+      if (
+        polRings.length &&
+        (!allowPolIdx(pIdxM) ||
+          findPolIdx(p1[0], p1[1]) !== pIdxM ||
+          findPolIdx(p2[0], p2[1]) !== pIdxM ||
+          (hasLargePolity &&
+            (nearPolityBorder(mx, my, borderMargin) ||
+              (isMultiRegime &&
+                (nearPolityBorder(p1[0], p1[1], 0.38) || nearPolityBorder(p2[0], p2[1], 0.38))))))
+      ) {
+        penX = NaN;
+        penY = NaN;
+        continue;
+      }
+      seenEdges.add(ek);
+      const [x1, y1] = this.projector.toScreen(p1[0], p1[1]);
+      const [x2, y2] = this.projector.toScreen(p2[0], p2[1]);
+      if (Math.hypot(x2 - x1, y2 - y1) < 0.05) continue;
+      if (x1 !== penX || y1 !== penY) {
+        d += `M${x1.toFixed(1)} ${y1.toFixed(1)}`;
+      }
+      d += `L${x2.toFixed(1)} ${y2.toFixed(1)}`;
+      penX = x2;
+      penY = y2;
+    }
+  }
+
+  Object.defineProperty(snap, '_cachedRegionBoundaryPath', {
+    value: d,
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
+  return d;
+}
+
 function main() {
   const t0 = performance.now();
   const sandbox = { window: {} };
@@ -429,6 +617,20 @@ function main() {
     'app.js & index.html must unify event callouts under #chk-milestones (_syncAutoMilestoneBalloon, ep-close) and remove dead code (chk-event-callouts, toggleEventCallouts, toggleGenealogyMode, _startGuqinSynthFallback)'
   );
 
+  // 6b. Verify Guqin audio tracks are self-hosted same-origin MP3s in assets/audio/ (reachable on mainland China Wi-Fi without upload.wikimedia.org DNS blocking)
+  const guqinTracks = (sandbox.window.ATLAS_LORE_DATA && sandbox.window.ATLAS_LORE_DATA.GUQIN_TRACKS) || [];
+  assert(guqinTracks.length >= 5, `Expected at least 5 GUQIN_TRACKS, got ${guqinTracks.length}`);
+  for (const gt of guqinTracks) {
+    assert(
+      typeof gt.mp3 === 'string' && gt.mp3.startsWith('assets/audio/') && gt.mp3.endsWith('.mp3'),
+      `GUQIN_TRACKS (${gt.zh}) primary mp3 must be a same-origin assets/audio/*.mp3 path, got ${gt.mp3}`
+    );
+    const audioPath = path.join(ROOT, gt.mp3);
+    assert(fs.existsSync(audioPath), `Missing self-hosted Guqin audio file: ${gt.mp3}`);
+    const audioSize = fs.statSync(audioPath).size;
+    assert(audioSize > 100000, `Self-hosted Guqin audio file ${gt.mp3} is unexpectedly small (${audioSize} bytes)`);
+  }
+
   // 7. Validate PR #7 (pass icon), PR #8 (balloon caret & bookmark toggle tab), and PR #10 (SEO metadata & sitemap)
   const styleCss = fs.readFileSync(path.join(ROOT, 'css', 'style.css'), 'utf8');
   assert(
@@ -632,7 +834,23 @@ function main() {
       north: 55,
     }),
   });
+  ctrl._setEnglishLocale(enLocale);
   ctrl._initTimelineBands();
+  {
+    const probe = Object.create(ControllerClass.prototype);
+    let enumerations = 0;
+    const dict = new Proxy({ sample: 'translation' }, {
+      ownKeys(target) { enumerations++; return Reflect.ownKeys(target); },
+    });
+    probe._setEnglishLocale({ dict });
+    assert.strictEqual(probe._hasEnDict(), true, 'A loaded dictionary must be available');
+    for (let i = 0; i < 20; i++) assert.strictEqual(probe._hasEnDict(), true);
+    assert.strictEqual(enumerations, 1, 'Dictionary availability must not rescan on the hot path');
+    probe._setEnglishLocale({ dict: {} });
+    assert.strictEqual(probe._hasEnDict(), false, 'Replacing with an empty dictionary resets the flag');
+    probe._setEnglishLocale(null);
+    assert.strictEqual(probe._hasEnDict(), false, 'A missing locale remains supported');
+  }
   assert.strictEqual(
     typeof ctrl._lazyAssetUrl,
     'function',
@@ -1242,6 +1460,88 @@ function main() {
   );
   ctrl.projector.toScreen = (lng, lat) => [(lng - 66) * 13.15, (55 - lat) * 17.07];
   ctrl._hydrateSnapshots();
+  {
+    let snapshotsChecked = 0;
+    let anchorsChecked = 0;
+    const checkBoundary = (snapshot, name) => {
+      const before = { ...snapshot };
+      const after = { ...snapshot };
+      const expected = buildRegionBoundaryReference.call(ctrl, before);
+      const actual = ctrl._buildRegionBoundaryPath(after);
+      assert.strictEqual(actual, expected, `Region boundary geometry changed: ${name}`);
+      assert.strictEqual(ctrl._buildRegionBoundaryPath(after), actual, `Boundary cache changed: ${name}`);
+      assert.strictEqual(typeof after._allowRegionAnchor, typeof before._allowRegionAnchor);
+      if (before._allowRegionAnchor) {
+        const points = [];
+        for (let lng = 66; lng <= 142; lng += 9.5) {
+          for (let lat = 14; lat <= 55; lat += 6.8) points.push([lng, lat]);
+        }
+        for (const region of snapshot.regions || []) if (region.anchor) points.push(region.anchor);
+        for (const point of points) {
+          assert.strictEqual(after._allowRegionAnchor(...point), before._allowRegionAnchor(...point),
+            `Region label-anchor classification changed: ${name}`);
+          anchorsChecked++;
+        }
+      }
+      return { before, after, expected };
+    };
+    for (const [key, snapshot] of Object.entries(ctrl.snapshots)) {
+      if (Array.isArray(snapshot)) continue;
+      checkBoundary(snapshot, key);
+      snapshotsChecked++;
+    }
+    assert(snapshotsChecked > 180 && anchorsChecked > 16000,
+      'Boundary equivalence must cover the full atlas');
+
+    const rectangle = (x0, y0, x1, y1) => ({
+      type: 'Polygon', coordinates: [[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]],
+    });
+    const dense = points => {
+      const ring = [];
+      for (let i = 0; i < points.length; i++) {
+        const a = points[i], b = points[(i + 1) % points.length];
+        for (let k = 0; k < 20; k++) {
+          ring.push([a[0] + (b[0] - a[0]) * k / 20, a[1] + (b[1] - a[1]) * k / 20]);
+        }
+      }
+      ring.push(ring[0]);
+      return { type: 'Polygon', coordinates: [ring] };
+    };
+    const regions = (x0, x1, y) => [
+      { title: 'north', shape: rectangle(x0, y, x1, y + 1) },
+      { title: 'south', shape: rectangle(x0, y - 1, x1, y) },
+    ];
+    const main = { title: 'main', role: 'main', shape: rectangle(0, -20, 70, 30) };
+    const notched = {
+      title: 'rival', role: 'rival',
+      shape: dense([[10, 0], [60, 0], [60, 10], [40, 10], [40, 5], [20, 5], [20, 10], [10, 10]]),
+    };
+    const rivals = [
+      { title: 'east', role: 'rival', shape: rectangle(80, 0, 90, 10) },
+      { title: 'west', role: 'rival', shape: rectangle(-40, 0, -30, 10) },
+    ];
+    for (const [name, polities, regionList, draws, anchor] of [
+      ['multi-regime 0.55 midpoint exclusion', [main, notched, ...rivals], regions(25, 35, 5.5), false, null],
+      ['three-regime midpoint control', [main, notched, rivals[0]], regions(25, 35, 5.5), true, null],
+      ['multi-regime 0.38 endpoint exclusion', [main, notched, ...rivals], regions(20.3, 30, 7), false, null],
+      ['three-regime endpoint control', [main, notched, rivals[0]], regions(20.3, 30, 7), true, null],
+      ['rival area 50 remains eligible', [
+        { title: 'rival', role: 'rival', shape: rectangle(20, 5, 30, 10) }, rivals[0],
+      ], regions(22, 28, 7), true, [25, 8, true]],
+      ['area-50 main activates area-30 rival suppression', [
+        { title: 'rival', role: 'rival', shape: rectangle(0, 0, 6, 5) },
+        { title: 'main', role: 'main', shape: rectangle(10, 0, 20, 5) },
+      ], regions(1, 5, 2.5), false, [3, 2, false]],
+    ]) {
+      const { before, after, expected } = checkBoundary({ regions: regionList, polities }, name);
+      assert.strictEqual(Boolean(expected), draws, `Vacuous reference fixture: ${name}`);
+      if (anchor) {
+        assert.strictEqual(before._allowRegionAnchor(anchor[0], anchor[1]), anchor[2]);
+        assert.strictEqual(after._allowRegionAnchor(anchor[0], anchor[1]), anchor[2]);
+      }
+    }
+    console.log(`  [boundary equivalence] ${snapshotsChecked} snapshots, ${anchorsChecked} anchors, 6 margin/threshold fixtures`);
+  }
   const tangDyn = dynasties.find((d) => d.key === 'tang');
   const tang780Key = ctrl._resolveSnapKey(tangDyn, 780);
   const tang780Snap = snapshots[tang780Key];
@@ -1274,6 +1574,8 @@ function main() {
       's_xihan_a',
       's_xihan_b1',
       's_xihan_b2',
+      's_xihan_b3a',
+      's_xihan_b3b',
       's_xihan_b3',
       's_xihan_b',
       's_donghan',
@@ -1735,6 +2037,133 @@ function main() {
       );
     }
   }
+  {
+    let multiSiteCount = 0;
+    for (const d of dynasties) {
+      for (const m of d.milestones || []) {
+        if (!m.site || !m.site.includes('·')) continue;
+        const zhParts = ctrl._splitOutsideParens(m.site, /\s*·\s*/);
+        if (zhParts.length < 2) continue;
+        multiSiteCount++;
+        assert(
+          Array.isArray(m.siteCoords) && m.siteCoords.length === zhParts.length,
+          `Multi-site milestone ${d.key}:${m.year} [${m.site}] must have siteCoords of length ${zhParts.length}, got ${m.siteCoords && m.siteCoords.length}`
+        );
+        for (const sc of m.siteCoords) {
+          assert(
+            Array.isArray(sc) && sc.length === 2 && sc[0] >= 60 && sc[0] <= 145 && sc[1] >= 10 && sc[1] <= 60,
+            `Invalid siteCoord ${JSON.stringify(sc)} on ${d.key}:${m.year}`
+          );
+        }
+        const enEntry = enLocale.milestones[`${d.key}:${m.year}`];
+        const enParts = ctrl._splitOutsideParens(enEntry && enEntry[1], /\s*(?:·|&|\/|,)\s*/);
+        assert.strictEqual(
+          enParts.length,
+          zhParts.length,
+          `EN multi-site count mismatch on ${d.key}:${m.year}: zh=${JSON.stringify(zhParts)} vs en=${JSON.stringify(enParts)}`
+        );
+      }
+    }
+    assert(multiSiteCount >= 115, `Expected >=115 multi-site milestones verified, got ${multiSiteCount}`);
+    const dhDyn = dynasties.find((d) => d.key === 'donghan');
+    const m144 = dhDyn.milestones.find((m) => m.year === 144);
+    const m215 = dhDyn.milestones.find((m) => m.year === 215);
+    assert.strictEqual(ctrl._getMilestoneAnchors(dhDyn, m144).length, 2, 'donghan:144 must resolve 2 anchors');
+    assert.strictEqual(ctrl._getMilestoneAnchors(dhDyn, m215).length, 3, 'donghan:215 must resolve 3 anchors');
+    const xhDyn = dynasties.find((d) => d.key === 'xihan');
+    const mn110 = xhDyn.milestones.find((m) => m.year === -110);
+    assert.strictEqual(
+      ctrl._getMilestoneAnchors(xhDyn, mn110).map((a) => a.shortLabel).join('|'),
+      '东冶|珠崖',
+      'xihan:-110 must split outside parentheses cleanly into 东冶 & 珠崖'
+    );
+    const xjDyn = dynasties.find((d) => d.key === 'xijin');
+    const m299 = xjDyn.milestones.find((m) => m.year === 299);
+    assert.strictEqual(
+      ctrl._getMilestoneAnchors(xjDyn, m299).length,
+      1,
+      'xijin:299 [长安 · 关中] must merge co-located region anchor into 1 pin/pill'
+    );
+    ctrl.openMilestoneBalloon(dhDyn, m215);
+    const pillCount = (ctrl.milestoneBalloon.innerHTML.match(/class="ep-place"/g) || []).length;
+    assert.strictEqual(pillCount, 3, 'donghan:215 balloon must render 3 independent .ep-place pills');
+    assert(
+      !ctrl.milestoneBalloon.innerHTML.includes('data-selected="1"') &&
+        !ctrl.milestoneBalloon.innerHTML.includes('沿革 ›') &&
+        ctrl.milestoneBalloon.innerHTML.includes('南郑 ›') &&
+        ctrl.milestoneBalloon.innerHTML.includes('临湘 ›') &&
+        ctrl.milestoneBalloon.innerHTML.includes('合肥 ›'),
+      `Expected uniform .ep-place pill labels without data-selected or 沿革 suffix on donghan:215, got: ${ctrl.milestoneBalloon.innerHTML}`
+    );
+    const m195 = dhDyn.milestones.find((m) => m.year === 195);
+    assert.strictEqual(
+      ctrl._getMilestoneAnchors(dhDyn, m195).map((a) => a.shortLabel).join('|'),
+      '曲阿|洛阳',
+      'donghan:195 must pair Sun Ce in Qu’a with Emperor Xian returning to Luoyang'
+    );
+    const mn61 = xhDyn.milestones.find((m) => m.year === -61);
+    assert.strictEqual(
+      ctrl._getMilestoneAnchors(xhDyn, mn61).length,
+      1,
+      'xihan:-61 [临羌 · 湟水] (28 km apart) must merge into 1 anchor under <=32 km rule'
+    );
+    const qingDyn = dynasties.find((d) => d.key === 'qing');
+    const m1771 = qingDyn.milestones.find((m) => m.year === 1771);
+    const tangDyn = dynasties.find((d) => d.key === 'tang');
+    const m713 = tangDyn.milestones.find((m) => m.year === 713);
+    const prevAnim = ctrl._animateCameraTo;
+    const prevDefCam = ctrl._getDefaultCamera;
+    const prevCam = ctrl.camera;
+    let capturedCam = null;
+    ctrl._animateCameraTo = (c) => {
+      capturedCam = c;
+    };
+    ctrl._getDefaultCamera = () => ({ x: 350, y: 215, w: 500, h: 420, zoom: 2 });
+    ctrl.camera = { x: 350, y: 215, w: 500, h: 420, zoom: 2 };
+    ctrl.openMilestoneBalloon(qingDyn, m1771);
+    ctrl._frameMilestoneAnchors(qingDyn, m1771, { isMapChange: true });
+    assert(
+      !capturedCam || capturedCam.w <= 500 * 1.04,
+      `Continental multi-site qing:1771 [伊犁 · 承德] must NOT blow out camera.w > defCam.w*1.04, got ${capturedCam && capturedCam.w}`
+    );
+    capturedCam = null;
+    ctrl.openMilestoneBalloon(tangDyn, m713);
+    ctrl._frameMilestoneAnchors(tangDyn, m713, { isMapChange: false });
+    assert(
+      capturedCam && capturedCam.w <= 380,
+      `Continental multi-site tang:713 [长安 · 忽汗城] click must focus primary anchor (w<=380) rather than continent zoom, got ${capturedCam && capturedCam.w}`
+    );
+    // Mobile measurement & sibling-pin avoidance checks
+    ctrl.milestoneBalloon.offsetWidth = 264;
+    ctrl.milestoneBalloon.offsetHeight = 96;
+    ctrl.milestoneBalloon.style = {
+      left: '310px',
+      top: '180px',
+      setProperty() {},
+    };
+    ctrl.milestoneBalloon.dataset = {};
+    ctrl._measureMilestoneBalloonSize(190, 54);
+    assert.strictEqual(ctrl._milestoneBalloonSize.w, 264, 'Real mobile offsetWidth must be cached');
+    assert.strictEqual(ctrl._milestoneBalloonSize.h, 96, 'Real mobile offsetHeight must be cached');
+    assert.strictEqual(ctrl.milestoneBalloon.style.left, '310px', 'Measurement must restore prior left');
+    ctrl.openMilestoneBalloon(dhDyn, m215);
+    ctrl._milestoneBalloonSize = { w: 264, h: 92 };
+    ctrl.camera = { x: 430, y: 225, w: 340, h: 610, zoom: 1000 / 340 };
+    const prevWinW = sandbox.window.innerWidth;
+    sandbox.window.innerWidth = 390;
+    Object.getPrototypeOf(ctrl)._positionMilestoneBalloon.call(ctrl, { width: 390, height: 700 });
+    sandbox.window.innerWidth = prevWinW;
+    assert.strictEqual(
+      ctrl.milestoneBalloon.dataset.caret,
+      'top',
+      `Mobile 390x700 donghan:215 balloon must flip below Linxiang (caret=top) to avoid covering northern sibling pins, got ${ctrl.milestoneBalloon.dataset.caret}`
+    );
+    delete ctrl.milestoneBalloon.offsetWidth;
+    delete ctrl.milestoneBalloon.offsetHeight;
+    ctrl._animateCameraTo = prevAnim;
+    ctrl._getDefaultCamera = prevDefCam;
+    ctrl.camera = prevCam;
+  }
 
   // CUJ 19: Complete Region/Prefecture Hydration & Transition Era Snapshots (Chu-Han, Gengshi/Chimei, Huang Chao & Late Tang Warlords)
   for (const [sk, snap] of Object.entries(snapshots)) {
@@ -1823,7 +2252,7 @@ function main() {
       `s_zhanguo_a (-403 BCE) must not split State of Yue with post-222 BCE Qin commandery ${anachronistic}`
     );
   }
-  for (const qinSnapKey of ['s_zhanguo_e5', 's_qin_a', 's_qin_b', 's_qin', 's_qin_chuhan']) {
+  for (const qinSnapKey of ['s_zhanguo_e5', 's_qin_a', 's_qin_b', 's_qin', 's_qin_c', 's_qin_d', 's_qin_chuhan']) {
     const qSnap = snapshots[qinSnapKey];
     for (const cmdTitle of ['泗水郡', '东海郡', '鄣郡', '会稽郡']) {
       assert(
@@ -2035,6 +2464,66 @@ function main() {
   delete ctrl.closeMilestoneBalloon;
   delete ctrl.closeGenealogyCard;
   delete ctrl._updateScaleBar;
+
+  // CUJ 22a: Symmetric 3-Person Chronicle Matching (Li Bai × Du Fu × Gao Shi, Cao Cao × Liu Bei × Sun Quan), Monarch Remote-Dispatch Guard & Semicolon Multi-Route Inspect
+  {
+    const gaoshiProf = ctrl._resolvePersonProfile('gaoshi');
+    assert(
+      gaoshiProf && gaoshiProf.zh === '高适' && ctrl._collectPersonEvents(gaoshiProf).length >= 5,
+      'gaoshi (高适) must resolve in PERSON_PROFILES with >= 5 chronological life events'
+    );
+    const ldg3 = ctrl._buildPersonTracksAndEvents(
+      ctrl._resolvePersonProfiles(['libai', 'dufu', 'gaoshi'])
+    );
+    const dg2 = ctrl._buildPersonTracksAndEvents(
+      ctrl._resolvePersonProfiles(['dufu', 'gaoshi'])
+    );
+    const lg2 = ctrl._buildPersonTracksAndEvents(
+      ctrl._resolvePersonProfiles(['libai', 'gaoshi'])
+    );
+    assert(
+      ldg3.sameTimeCount === 5 &&
+        ldg3.events.some(
+          (e) => e.isSharedEncounter && e.year === 744 && e.participants.length === 3
+        ) &&
+        dg2.sameTimeCount === 3 &&
+        lg2.sameTimeCount === 1,
+      `Expected symmetric encounter matching for ['libai','dufu','gaoshi'] (5 shared encounters including 3-way 744 Suiyang), ['dufu','gaoshi'] (3 shared encounters), and ['libai','gaoshi'] (1 shared encounter), got ldg3=${ldg3.sameTimeCount}, dg2=${dg2.sameTimeCount}, lg2=${lg2.sameTimeCount}`
+    );
+    const cls3 = ctrl._buildPersonTracksAndEvents(
+      ctrl._resolvePersonProfiles(['caocao', 'liubei', 'sunquan'])
+    );
+    const ls2 = ctrl._buildPersonTracksAndEvents(
+      ctrl._resolvePersonProfiles(['liubei', 'sunquan'])
+    );
+    assert(
+      cls3.sameTimeCount >= 3 && ls2.sameTimeCount >= 2,
+      `Expected symmetric encounter matching for ['caocao','liubei','sunquan'] (${cls3.sameTimeCount}) and ['liubei','sunquan'] (${ls2.sameTimeCount})`
+    );
+    const xzEvents = ctrl._collectPersonEvents(ctrl._resolvePersonProfile('tangxuanzong'));
+    assert(
+      !xzEvents.some((e) => /范阳|大庾岭|潼关/.test(e.siteZh)),
+      `tangxuanzong trajectory must not jump to remote-dispatch sites (范阳/大庾岭/潼关), got sites: ${xzEvents.map((e) => e.siteZh).join(',')}`
+    );
+    const sqEvents = ctrl._collectPersonEvents(ctrl._resolvePersonProfile('sunquan'));
+    assert(
+      !sqEvents.some((e) => /夷洲/.test(e.siteZh)),
+      `sunquan trajectory must not jump to remote-dispatch site 夷洲, got sites: ${sqEvents.map((e) => e.siteZh).join(',')}`
+    );
+    const multiRouteInspect = ctrl.inspect({
+      year: 208,
+      place: '许昌,江陵,赤壁;柴桑,樊口,赤壁',
+    });
+    assert(
+      multiRouteInspect.place === '许昌,江陵,赤壁;柴桑,樊口,赤壁' &&
+        Array.isArray(multiRouteInspect.route) &&
+        multiRouteInspect.route.length === 6 &&
+        multiRouteInspect.route[3].trackIdx === 1 &&
+        multiRouteInspect.route[3].trackStep === 1 &&
+        multiRouteInspect.route[3].distanceFromPrevKm === 0,
+      `inspect() on semicolon multi-route must preserve ';' separator, trackIdx/trackStep, and reset distanceFromPrevKm=0 at start of track 1, got ${JSON.stringify(multiRouteInspect.route[3])}`
+    );
+  }
 
   // CUJ 22: Complete English Dictionary Coverage, Boot Seed Parity & Non-Zero Oriented Fill Rule Guard
   assert(
@@ -2496,11 +2985,16 @@ function main() {
     assert(
       provBounds &&
         typeof provBounds.interior === 'string' &&
-        provBounds.interior.length > 50000 &&
+        provBounds.interior.length > 6000 &&
+        provBounds.interior.length < 75000 &&
         typeof provBounds.outer === 'string' &&
-        provBounds.outer.length > 35000 &&
-        provBounds.combined === `${provBounds.interior}${provBounds.outer}`,
-      `Expected _buildProvinceBoundaryPaths to return non-empty deduplicated interior and outer SVG paths, got interior=${provBounds && provBounds.interior && provBounds.interior.length} outer=${provBounds && provBounds.outer && provBounds.outer.length}`
+        provBounds.outer.length > 6000 &&
+        provBounds.outer.length < 75000 &&
+        provBounds.combined === `${provBounds.interior}${provBounds.outer}` &&
+        Array.isArray(provBounds.tiles) &&
+        provBounds.tiles.length >= 4 &&
+        provBounds.tiles.length <= 12,
+      `Expected _buildProvinceBoundaryPaths to return topology-simplified tiled interior/outer SVG paths, got interior=${provBounds && provBounds.interior && provBounds.interior.length} outer=${provBounds && provBounds.outer && provBounds.outer.length} tiles=${provBounds && provBounds.tiles && provBounds.tiles.length}`
     );
     assert.strictEqual(
       ctrl._buildProvinceBoundaryPaths(),
@@ -4244,13 +4738,13 @@ function main() {
       assert(findSt(tangDyn, w), `tang: must include warlord settlement ${w}`);
     }
 
-    // Tang 20 map change milestones
-    const expectedTangMapChanges = [618, 621, 630, 635, 640, 648, 657, 668, 676, 690, 702, 705, 755, 757, 763, 764, 790, 848, 881, 907];
+    // Tang 21 map change milestones
+    const expectedTangMapChanges = [618, 621, 630, 635, 640, 648, 657, 668, 676, 690, 702, 705, 755, 757, 763, 764, 790, 848, 881, 885, 907];
     const actualTangMapChanges = (tangDyn.milestones || []).filter((m) => m.isMapChange).map((m) => m.year);
     assert.strictEqual(
       JSON.stringify(actualTangMapChanges),
       JSON.stringify(expectedTangMapChanges),
-      'tang: 20 map change milestone years must match'
+      'tang: 21 map change milestone years must match'
     );
 
     // Spatial checks: s_sui_d and s_tang_0 warlords
@@ -4299,15 +4793,23 @@ function main() {
     }
   }
 
-  // 23aa. Mountain-range name labels (山川形胜): the twelve ranges that frame China's historical frontiers
+  // 23aa. Mountain-range and boundary-river labels (山川形胜): a deliberately small, household-name set
   {
     const ranges = (sandbox.window.HYDRO_DATA.labels || []).filter((lb) => lb.kind === 'range');
-    const expectedRanges = ['秦岭', '大巴山', '太行山', '燕山', '阴山', '贺兰山', '祁连山', '天山', '昆仑山', '南岭', '武夷山', '大兴安岭'];
+    const expectedRanges = [
+      '秦岭', '大巴山', '太行山', '燕山', '阴山', '贺兰山', '祁连山', '天山', '昆仑山', '南岭', '武夷山', '大兴安岭',
+      '长白山', '岷山', '大别山', '陇山', '巫山', '葱岭', '燕然山',
+    ];
     assert.strictEqual(
       JSON.stringify(ranges.map((r) => r.zh).sort()),
       JSON.stringify([...expectedRanges].sort()),
-      'HYDRO_DATA.labels must contain exactly the 12 curated mountain-range labels'
+      'HYDRO_DATA.labels must contain exactly the 19 curated mountain-range labels'
     );
+    const deserts = (sandbox.window.HYDRO_DATA.labels || []).filter((lb) => lb.kind === 'desert');
+    assert.strictEqual(JSON.stringify(deserts.map((d) => d.zh)), JSON.stringify(['大 漠']), 'Exactly one Gobi watermark label');
+    const pamirs = ranges.find((r) => r.zh === '葱岭');
+    assert.strictEqual(ctrl._hydroLabelPair(pamirs, 640).zh, '葱岭', 'Pamirs in 640 CE must read 葱岭');
+    assert.strictEqual(ctrl._hydroLabelPair(pamirs, 1800).zh, '帕米尔', 'Pamirs in 1800 CE must read 帕米尔');
     for (const r of ranges) {
       assert(
         typeof r.en === 'string' && r.en.length > 0 && !/[\u4e00-\u9fa5]/.test(r.en),
@@ -4319,6 +4821,21 @@ function main() {
       );
       assert(Math.abs(r.rot || 0) <= 90, `Mountain range ${r.zh} rotation must stay readable (|rot| <= 90)`);
     }
+    const detailRivers = (sandbox.window.HYDRO_DATA.labels || []).filter((lb) => lb.kind === 'river' && lb.tier >= 1);
+    assert.strictEqual(
+      JSON.stringify(detailRivers.map((lb) => lb.zh).sort()),
+      JSON.stringify(['鸭绿江', '大同江', '大渡河', '金沙江', '澜沧江', '怒江'].sort()),
+      'Zoom-gated boundary rivers must stay limited to the 6 classic frontier rivers'
+    );
+    for (const lb of detailRivers) {
+      for (const en of lb.eraNames || []) {
+        assert(!/[（(]/.test(en.zh), `Boundary river era name must be a single short name, got ${en.zh}`);
+      }
+    }
+    const yaluLabel = detailRivers.find((lb) => lb.zh === '鸭绿江');
+    assert.strictEqual(ctrl._hydroLabelPair(yaluLabel, -100).zh, '马訾水', 'Yalu in 100 BCE must resolve to 马訾水');
+    assert.strictEqual(ctrl._hydroLabelPair(yaluLabel, 668).zh, '鸭绿水', 'Yalu in 668 CE must resolve to 鸭绿水');
+    assert.strictEqual(ctrl._hydroLabelPair(yaluLabel, 1400).zh, '鸭绿江', 'Yalu in 1400 CE must resolve to 鸭绿江');
   }
 
   // 23ab. Ming capitals, Later Jin capitals, and map-change milestones (History of Ming / Ming Shilu)
@@ -4673,9 +5190,9 @@ function main() {
     ctrl.locale = 'zh';
   }
 
-  // CUJ 28: Timeline autoplay — constant playhead speed along the scrubber bar, lands on every
-  // milestone year, holds on dynasty openings and isMapChange milestones, and keeps the event
-  // callout while playing.
+  // CUJ 28: Timeline autoplay is event-driven — the playhead lands only on event nodes
+  // (milestone years + territory-snapshot boundaries), never on empty calendar years, dwells
+  // one beat on ordinary events and longer on map-changing nodes, and keeps the event callout.
   {
     const proto = ControllerClass.prototype;
     let tick = null;
@@ -4688,51 +5205,45 @@ function main() {
     Object.assign(ctrl, { activePerson: null, challenge: null, personTimer: null });
     ctrl.closeMilestoneBalloon = () => {};
     ctrl._syncAutoMilestoneBalloon = () => {};
-    const visited = new Set();
+    const visited = [];
     ctrl.jumpToYear = function (y) {
       this.year = y;
       this.dynastyIdx = this._findDynastyIndex(y);
-      visited.add(y);
+      visited.push(y);
     };
     ctrl.year = ctrl.minYear;
     ctrl.startAutoplay();
     const stops = proto._autoplayStops.call(ctrl).filter((s) => s.year > ctrl.minYear);
     const stopYears = new Set(stops.map((s) => s.year));
     const yearTicks = new Map();
-    const movingTicks = dynasties.map(() => 0);
-    const landings = [];
     let totalTicks = 0;
     while (ctrl.playing && totalTicks < 20000) {
-      const [p0, y0] = [ctrl.playProgress, ctrl.year];
       tick();
       totalTicks++;
       yearTicks.set(ctrl.year, (yearTicks.get(ctrl.year) || 0) + 1);
-      if (ctrl.playProgress > p0) movingTicks[ctrl._findDynastyIndex(ctrl.year)]++;
-      if (ctrl.year !== y0 && stopYears.has(ctrl.year)) landings.push(totalTicks);
     }
     assert(!ctrl.playing && ctrl.year === ctrl.maxYear, `Autoplay must stop at ${ctrl.maxYear}, got ${ctrl.year}`);
 
-    const missed = stops.filter((s) => !visited.has(s.year)).map((s) => s.year);
-    assert.strictEqual(missed.length, 0, `Autoplay skipped milestone years ${missed.slice(0, 8).join(', ')}`);
-    const shortest = Math.min(...landings.slice(1).map((t, i) => t - landings[i]));
-    assert(shortest >= 4, `Each autoplay callout must stay at least ~1 s, shortest was ${shortest} ticks`);
-    for (const s of stops.filter((x) => x.hold)) {
-      assert(yearTicks.get(s.year) >= 9, `Autoplay must hold ~2.5 s on map-change milestone ${s.year}`);
+    const missed = stops.filter((s) => !visited.includes(s.year)).map((s) => s.year);
+    assert.strictEqual(missed.length, 0, `Autoplay skipped event nodes ${missed.slice(0, 8).join(', ')}`);
+    const strays = visited.filter((y) => !stopYears.has(y) && y !== ctrl.maxYear);
+    assert.strictEqual(strays.length, 0, `Autoplay must jump node-to-node, but landed on empty years ${strays.slice(0, 8).join(', ')}`);
+    for (const s of stops) {
+      const dwell = yearTicks.get(s.year) || 0;
+      if (s.hold) assert(dwell >= 10, `Autoplay must hold ~2.8 s on map-changing node ${s.year}, got ${dwell} ticks`);
+      else assert(dwell >= 4, `Autoplay must show ordinary event ${s.year} for ~1.1 s, got ${dwell} ticks`);
     }
     for (const y of [-221, 755, 1127]) {
       assert(stops.some((s) => s.year === y && s.hold), `Autoplay must hold on the border change in ${y}`);
     }
-
-    const moving = movingTicks.reduce((a, b) => a + b, 0);
-    assert(Math.abs(moving - (9 * 60 * 1000) / 280) < 40, `Autoplay full run should take ~9 min of ticks, got ${moving}`);
-    dynasties.forEach((d, i) => {
-      const expected = ctrl.bandWeights[i] / ctrl.totalBandWeight;
-      const share = movingTicks[i] / moving;
-      assert(
-        Math.abs(share - expected) / expected < 0.15,
-        `Autoplay time for ${d.key} must match its scrubber band (${(expected * 100).toFixed(1)}%), got ${(share * 100).toFixed(1)}%`
-      );
-    });
+    // Snapshot boundaries without a same-year milestone are still nodes (Shang Yang's Hexi, Sui collapse, Huang Chao).
+    for (const y of [-340, 614, 880]) {
+      assert(stops.some((s) => s.year === y && s.hold), `Autoplay must land and hold on the territory-snapshot boundary ${y}`);
+    }
+    const holdCount = stops.filter((s) => s.hold).length;
+    assert(holdCount >= 180 && holdCount < stops.length, `Expected ~180+ map-changing nodes among ${stops.length}, got ${holdCount}`);
+    const runMin = (totalTicks * 280) / 60000;
+    assert(runMin > 12 && runMin < 16, `A 1× full run should take ~14 min (≈190 map nodes × 2.8 s + ≈290 events × 1.1 s), got ${runMin.toFixed(1)} min`);
 
     const tang = dynasties.find((d) => d.key === 'tang');
     Object.assign(ctrl, {
@@ -5086,6 +5597,32 @@ function main() {
       joseonWatermark.classList.contains('is-crowded-hidden'),
       'Modern watermark 朝鲜 must hide when an active historical polity with the identical name (朝鲜) is displayed'
     );
+
+    // CUJ 31b: a zoom-gated range label must reappear after zooming out past the gate and back in
+    //          (regression: the hidden state used to stay locked across zoomOnly frames).
+    const [qx, qy] = ctrl.projector.toScreen(107.4, 33.62);
+    const qinlingNode = makeCaptionNode(['hydro-label', 'is-range', 'is-crowded-hidden'], '秦岭', qx, qy, {});
+    const rangeAttrs = { 'data-rot': '-2' };
+    const baseGet = qinlingNode.getAttribute;
+    qinlingNode.getAttribute = (k) => (k in rangeAttrs ? rangeAttrs[k] : baseGet(k));
+    const hydroCtrl = {
+      ...mockCtrl,
+      camera: { x: 300, y: 200, w: 400, h: 280, zoom: 2.5 },
+      grpPolities: { classList: makeCls(), querySelectorAll: () => [] },
+      grpNeighbors: { querySelectorAll: () => [] },
+      grpRivers: { classList: makeCls(), querySelectorAll: () => [qinlingNode] },
+    };
+    proto._rescaleSvgTypography.call(hydroCtrl);
+    assert(!qinlingNode.classList.contains('is-crowded-hidden'), '秦岭 must be visible on first landing at zoom 2.5');
+    hydroCtrl.camera = { x: 0, y: 0, w: 1000, h: 700, zoom: 1 };
+    proto._rescaleSvgTypography.call(hydroCtrl, { zoomOnly: true });
+    assert(qinlingNode.classList.contains('is-crowded-hidden'), '秦岭 must hide below the pass gate');
+    hydroCtrl.camera = { x: 300, y: 200, w: 400, h: 280, zoom: 2.5 };
+    proto._rescaleSvgTypography.call(hydroCtrl, { zoomOnly: true });
+    assert(
+      !qinlingNode.classList.contains('is-crowded-hidden'),
+      '秦岭 must reappear after zooming back in past the pass gate (zoomOnly frame)'
+    );
   }
 
   // CUJ 32: Timeline & Person Chronicle Playback Speed Control (1x -> 2x -> 0.25x -> 0.5x -> 1x)
@@ -5148,9 +5685,7 @@ function main() {
     ctrl.challenge = null;
     ctrl.playing = true;
     ctrl.playInterval = 99;
-    ctrl.playProgress = 0.42;
     ctrl.playHoldTicks = 3;
-    ctrl.playShownTicks = 2;
     ctrl.playSpeed = 1;
     proto._updatePlaySpeedUi.call(ctrl);
     assert.strictEqual(speedLbl.textContent, '1×', 'Initial speed label must be 1×');
@@ -5159,7 +5694,7 @@ function main() {
       '1× default speed must not have is-custom-speed active highlight'
     );
 
-    // Cycle 1 -> 2 -> 0.25 -> 0.5 -> 1 while timeline autoplay is running
+    // Cycle 1 -> 2 -> 4 -> 0.5 -> 1 while timeline autoplay is running
     assert.strictEqual(proto.cyclePlaySpeed.call(ctrl), 2, 'First click must switch speed to 2×');
     assert.strictEqual(speedLbl.textContent, '2×', 'Label must update to 2×');
     assert(
@@ -5167,12 +5702,11 @@ function main() {
       'Non-1× speed must highlight #act-play-speed with .is-custom-speed'
     );
     assert.strictEqual(scheduledMs[scheduledMs.length - 1], 140, '2× speed must reschedule tick interval to 140ms');
-    assert.strictEqual(ctrl.playProgress, 0.42, 'Changing speed live must preserve playProgress');
-    assert.strictEqual(ctrl.playHoldTicks, 3, 'Changing speed live must preserve playHoldTicks');
+    assert.strictEqual(ctrl.playHoldTicks, 3, 'Changing speed live must preserve the current dwell (playHoldTicks)');
 
-    assert.strictEqual(proto.cyclePlaySpeed.call(ctrl), 0.25, 'Second click must switch speed to 0.25×');
-    assert.strictEqual(speedLbl.textContent, '0.25×', 'Label must update to 0.25×');
-    assert.strictEqual(scheduledMs[scheduledMs.length - 1], 1120, '0.25× speed must reschedule tick interval to 1120ms');
+    assert.strictEqual(proto.cyclePlaySpeed.call(ctrl), 4, 'Second click must switch speed to 4×');
+    assert.strictEqual(speedLbl.textContent, '4×', 'Label must update to 4×');
+    assert.strictEqual(scheduledMs[scheduledMs.length - 1], 70, '4× speed must reschedule tick interval to 70ms');
 
     assert.strictEqual(proto.cyclePlaySpeed.call(ctrl), 0.5, 'Third click must switch speed to 0.5×');
     assert.strictEqual(scheduledMs[scheduledMs.length - 1], 560, '0.5× speed must reschedule tick interval to 560ms');
@@ -5285,15 +5819,56 @@ function main() {
         hasPt('s_xihan_a', '南越', 111.28, 23.48) &&
         hasPt('s_xihan_a', '南越', 109.416, 24.326) &&
         hasPt('s_xihan_b2', '南越', 113.261, 23.131) &&
-        hasPt('s_xihan_b3', '汉', 113.261, 23.131) &&
-        hasPt('s_xihan_b3', '汉', 111.28, 23.48),
-      'Panyu, Guangxin (Cangwu), and Tanzhong (Yulin) must stay in Nanyue until -111 BCE (s_xihan_b3)'
+        hasPt('s_xihan_b3a', '汉', 113.261, 23.131) &&
+        hasPt('s_xihan_b3a', '汉', 111.28, 23.48) &&
+        hasPt('s_xihan_b3a', '闽越', 119.3, 26.08) &&
+        !hasPt('s_xihan_b3a', '汉', 109.577, 19.521) &&
+        hasPt('s_xihan_b3a', '西南夷（滇 · 夜郎）', 102.751, 24.671) &&
+        hasPt('s_xihan_b3b', '汉', 119.3, 26.08) &&
+        hasPt('s_xihan_b3b', '汉', 109.577, 19.521) &&
+        hasPt('s_xihan_b3b', '西南夷（滇 · 夜郎）', 102.751, 24.671) &&
+        hasPt('s_xihan_b3', '汉', 102.751, 24.671) &&
+        hasPt('s_xihan_b3', '汉', 102.26, 27.89),
+      '4-stage Western Han expansion (-111 Nanyue -> -110 Minyue & Hainan -> -109 Southwest Yi/Yizhou -> -108 Wiman Joseon) must match milestones'
     );
-
-    // 4. 西域都护府 (-60 BCE, s_xihan_c) vs 西域诸国 (-111..-61 BCE, s_xihan_b3/s_xihan_b); 乐浪郡 (-108 BCE); 敦煌 & 居延
     assert(
-      !snapshots.s_xihan_b3.polities.some((p) => p.title === '西域都护府') &&
+      hasPt('s_qin_a', '秦', 115.5, 27.5) &&
+        hasPt('s_qin_b', '秦', 115.5, 27.5) &&
+        hasPt('s_qin', '秦', 115.5, 27.5) &&
+        hasPt('s_qin_c', '楚（张楚 · 怀王）', 115.5, 27.5) &&
+        hasPt('s_qin_d', '楚（怀王 · 项羽）', 115.5, 27.5) &&
+        hasPt('s_qin_chuhan', '西楚（项羽）', 115.5, 27.5) &&
+        hasPt('s_xihan_a', '汉（郡国并行）', 115.0, 25.8) &&
+        hasPt('s_xihan_b1', '汉', 115.0, 25.8) &&
+        hasPt('s_xihan_b2', '汉', 115.0, 25.8) &&
+        hasPt('s_xihan_b3a', '汉', 115.0, 25.8),
+      'Central and southern Jiangxi (Gan River basin) must not leave a hollow gap between Qin/Chu/Han and Nanyue/Minyue'
+    );
+    for (const sk of ['s_qin_d', 's_qin_chuhan', 's_xihan_a', 's_xihan_b1', 's_xihan_b2']) {
+      const ny = snapshots[sk].polities.find((p) => p.title === '南越' || p.title === '南越（赵佗）');
+      const my = snapshots[sk].polities.find((p) => p.title === '闽越');
+      assert(
+        ny && ny.role === 'rival' && ny.tint === '#7d5a38' && my && my.role === 'rival' && my.tint === '#9b7653',
+        `${sk} must keep Nanyue and Minyue as rival polities with unified tints (#7d5a38 / #9b7653)`
+      );
+    }
+    {
+      const myB3a = snapshots.s_xihan_b3a.polities.find((p) => p.title === '闽越');
+      assert(
+        myB3a && myB3a.role === 'rival' && myB3a.tint === '#9b7653' &&
+          !snapshots.s_xihan_b3b.polities.some((p) => p.title === '闽越'),
+        's_xihan_b3a (-111 BCE) must keep Minyue as a rival polity until its -110 BCE annexation in s_xihan_b3b'
+      );
+    }
+
+    // 4. 西域都护府 (-60 BCE, s_xihan_c) vs 西域诸国 (-111..-61 BCE, s_xihan_b3a..s_xihan_b); 乐浪郡 (-108 BCE); 敦煌 & 居延
+    assert(
+      !snapshots.s_xihan_b3a.polities.some((p) => p.title === '西域都护府') &&
+        !snapshots.s_xihan_b3b.polities.some((p) => p.title === '西域都护府') &&
+        !snapshots.s_xihan_b3.polities.some((p) => p.title === '西域都护府') &&
         !snapshots.s_xihan_b.polities.some((p) => p.title === '西域都护府') &&
+        snapshots.s_xihan_b3a.polities.some((p) => p.title === '西域诸国' && p.role === 'neighbor') &&
+        snapshots.s_xihan_b3b.polities.some((p) => p.title === '西域诸国' && p.role === 'neighbor') &&
         snapshots.s_xihan_b3.polities.some((p) => p.title === '西域诸国' && p.role === 'neighbor') &&
         snapshots.s_xihan_b.polities.some((p) => p.title === '西域诸国' && p.role === 'neighbor') &&
         snapshots.s_xihan_c.polities.some((p) => p.title === '西域都护府' && p.role === 'protectorate'),
@@ -5306,9 +5881,11 @@ function main() {
         hasPt('s_xihan_d', '新（王莽）', 125.751, 39.031) &&
         hasPt('s_xihan_b2', '汉', 94.661, 40.141) &&
         hasPt('s_xihan_b', '汉', 94.661, 40.141) &&
-        hasPt('s_xihan_b', '汉', 101.06, 41.95) &&
-        hasPt('s_xihan_c', '汉', 101.06, 41.95),
-      'Lelang Commandery (-108 BCE), Dunhuang, and Juyan must lie inside Han/Xin polygons'
+        hasPt('s_xihan_b', '汉', 100.45, 38.93) &&
+        hasPt('s_xihan_c', '汉', 100.45, 38.93) &&
+        !hasPt('s_xihan_b', '汉', 101.06, 41.95) &&
+        !hasPt('s_xihan_c', '汉', 101.06, 41.95),
+      'Lelang Commandery (-108 BCE), Dunhuang, and Zhangye must lie inside Han/Xin polygons without the artificial Juyan needle'
     );
   }
 
@@ -5834,7 +6411,7 @@ function main() {
         `${sk} (-228..-223 BCE) must place Yunzhong in 秦 and Dai ([114.551, 40.151]) in 代`
       );
     }
-    for (const sk of ['s_qin_a', 's_qin_b', 's_qin', 's_xihan_a', 's_xihan_b1', 's_xihan_b2', 's_xihan_b3', 's_xihan_b', 's_xihan_c', 's_xihan_d']) {
+    for (const sk of ['s_qin_a', 's_qin_b', 's_qin', 's_xihan_a', 's_xihan_b1', 's_xihan_b2', 's_xihan_b3a', 's_xihan_b3b', 's_xihan_b3', 's_xihan_b', 's_xihan_c', 's_xihan_d']) {
       const mainPol = snapshots[sk].polities[0];
       const mainRing = mainPol.shape.type === 'Polygon' ? mainPol.shape.coordinates[0] : mainPol.shape.coordinates[0][0];
       assert(
@@ -5957,6 +6534,55 @@ function main() {
           eHits.length > 0 && eHits[0].kind === 'era',
           `Explicit era query "${explicitEraQ}" must rank #1 as kind="era", got ${JSON.stringify(eHits[0])}`
         );
+      }
+
+      // First-principles ontological bucket ranking & core regime recall (齐/宋/汉/唐)
+      const qiHits = ctrl._queryQuickSearch('齐');
+      assert(
+        qiHits.length >= 6 &&
+          qiHits[0].bucket === 'regime' &&
+          qiHits[0].titleZh.includes('齐国') &&
+          qiHits.slice(0, 5).some((h) => h.titleZh === '南齐') &&
+          qiHits.slice(0, 5).some((h) => h.titleZh === '北齐'),
+        `"齐" search must prioritize regime hits (齐国/南齐/北齐) in top 5, got ${JSON.stringify(qiHits.slice(0, 5).map((h) => h.titleZh))}`
+      );
+      assert(
+        !qiHits.some((h) => h.kind === 'era'),
+        `"齐" 1-char search must not return false-positive monarch/era substring hits like 魏齐王·正始元年`
+      );
+      assert.strictEqual(
+        qiHits.filter((h) => h.titleZh === '齐郡').length,
+        1,
+        `"齐" search must consolidate cross-dynasty 齐郡 rows into 1 entry`
+      );
+      const qiJunHit = qiHits.find((h) => h.titleZh === '齐郡');
+      assert(
+        qiJunHit && qiJunHit.subZh && qiJunHit.subZh.startsWith('历'),
+        `Consolidated 齐郡 entry must display multi-dynasty subtitle ("历..."), got "${qiJunHit && qiJunHit.subZh}"`
+      );
+      assert(
+        qiHits.some((h) => h.bucket === 'person_era') &&
+          qiHits.some((h) => h.bucket === 'geo') &&
+          qiHits.some((h) => h.bucket === 'event'),
+        `"齐" search must surface diverse ontological buckets (regime, person_era, geo, event)`
+      );
+
+      for (const [regQ, expectedTitles] of [
+        ['宋', ['北宋', '南宋', '宋国', '刘宋']],
+        ['汉', ['西汉', '东汉', '蜀汉']],
+        ['唐', ['唐', '南唐', '后唐']],
+      ]) {
+        const rHits = ctrl._queryQuickSearch(regQ);
+        assert(
+          rHits.length > 0 && rHits[0].bucket === 'regime',
+          `"${regQ}" search must rank regime bucket #1, got ${JSON.stringify(rHits[0])}`
+        );
+        for (const expT of expectedTitles) {
+          assert(
+            rHits.some((h) => h.titleZh.includes(expT)),
+            `"${regQ}" search must recall core regime "${expT}", got ${JSON.stringify(rHits.map((h) => h.titleZh))}`
+          );
+        }
       }
 
       const clueChecks = [
@@ -6206,16 +6832,87 @@ function main() {
           sandbox.location.search = '';
         }
 
+        // 4c. Embed mode (?embed=1): README-only feature, so the main site must stay untouched.
+        const embedSaved = {
+          embed: ctrl.embed,
+          minYear: ctrl.minYear,
+          maxYear: ctrl.maxYear,
+          bandClip: ctrl._bandClip,
+          armed: ctrl._urlSyncArmed,
+          year: ctrl.year,
+          trace: ctrl.activeTrace,
+          polity: ctrl.activePolity,
+          person: ctrl.activePerson,
+        };
+        try {
+          assert.strictEqual(ctrl._parseEmbedParams(new URLSearchParams('year=1104')), null, 'Without embed=1 the site must not enter embed mode');
+          // Compare as JSON: the object comes from the vm sandbox, whose Object.prototype differs.
+          assert.strictEqual(
+            JSON.stringify(ctrl._parseEmbedParams(new URLSearchParams('embed=1&year=1104&from=1072&to=1126&autoplay=1'))),
+            JSON.stringify({ from: 1072, to: 1126, lock: false, autoplay: true, year: 1104 }),
+            'Embed params must parse from/to/lock/autoplay/year'
+          );
+
+          const fullLo = ctrl.dynasties[0].fromYear;
+          const fullHi = ctrl.dynasties[ctrl.dynasties.length - 1].toYear;
+          const applyRange = (qs) => {
+            Object.assign(ctrl, { minYear: fullLo, maxYear: fullHi, _bandClip: undefined });
+            ctrl.embed = ctrl._parseEmbedParams(new URLSearchParams(qs));
+            ctrl._applyEmbedYearRange();
+          };
+          applyRange('embed=1&from=1126&to=1072');
+          assert(ctrl.minYear === 1072 && ctrl.maxYear === 1126, 'A reversed from/to must be swapped into a valid range');
+          applyRange('embed=1&from=-9999&to=99999');
+          assert(ctrl.minYear === fullLo && ctrl.maxYear === fullHi && !ctrl._bandClip, 'from/to beyond the atlas must clamp and leave the timeline unzoomed');
+          applyRange('embed=1&year=1104&lock=1');
+          assert(ctrl.minYear === 1104 && ctrl.maxYear === 1104, 'lock=1 must freeze the year bounds at year');
+
+          applyRange('embed=1&from=1072&to=1126');
+          ctrl._initTimelineBands();
+          assert(Math.abs(ctrl._yearToProgress(1072)) < 1e-9, 'A zoomed embed timeline must start at from');
+          assert(Math.abs(ctrl._yearToProgress(1099) - 0.5) < 0.02, 'A zoomed embed timeline must be linear over [from, to]');
+          assert(Math.abs(ctrl._progressToYear(0.5) - 1099) <= 1, 'Scrubbing a zoomed embed timeline must map back to years inside [from, to]');
+          assert(ctrl.bandWeights.filter((w) => w > 0).length === 1, 'Only dynasties overlapping [from, to] may take room on the zoomed timeline');
+
+          ctrl._urlSyncArmed = true;
+          Object.assign(ctrl, { year: 1104, activeTrace: [101.778, 36.617], activePolity: null, activePerson: null });
+          sandbox.location.search = '?embed=1&year=1104&trace=101.778,36.617&from=1072&to=1126';
+          ctrl._writeUrlState();
+          ctrl._syncUrlLangParam();
+          assert.strictEqual(sandbox.location.search, '?embed=1&year=1104&trace=101.778,36.617&from=1072&to=1126', 'An embed must never rewrite the URL (the host page owns its address bar)');
+          const openUrl = ctrl._embedOpenUrl();
+          assert(openUrl.endsWith('?year=1104&trace=101.778,36.617'), `The "open in atlas" link must carry the view without embed params, got ${openUrl}`);
+
+          for (const readme of ['README.md', 'README_ZH.md']) {
+            const text = require('fs').readFileSync(require('path').join(__dirname, '..', readme), 'utf8');
+            assert(text.includes('embed=1') && text.includes('from=1072&to=1126'), `${readme} must document embed mode`);
+          }
+        } finally {
+          Object.assign(ctrl, {
+            embed: embedSaved.embed,
+            minYear: embedSaved.minYear,
+            maxYear: embedSaved.maxYear,
+            _bandClip: embedSaved.bandClip,
+            _urlSyncArmed: embedSaved.armed,
+            year: embedSaved.year,
+            activeTrace: embedSaved.trace,
+            activePolity: embedSaved.polity,
+            activePerson: embedSaved.person,
+          });
+          ctrl._initTimelineBands();
+          sandbox.location.search = '';
+        }
+
         // 5. _effectiveRenderedLocale distinguishes pending English dict from loaded English dict
         const savedEnLocale = ctrl.enLocale;
         ctrl.locale = 'en';
-        ctrl.enLocale = { dict: {} };
+        ctrl._setEnglishLocale({ dict: {} });
         assert.strictEqual(
           ctrl._effectiveRenderedLocale(),
           'en-pending',
           '_effectiveRenderedLocale must return en-pending when i18n_dict.js has not loaded yet'
         );
-        ctrl.enLocale = savedEnLocale;
+        ctrl._setEnglishLocale(savedEnLocale);
         assert.strictEqual(
           ctrl._effectiveRenderedLocale(),
           'en',
@@ -6542,7 +7239,7 @@ function main() {
           ctrl.dynastyIdx = 0;
           ctrl.year = -403;
           ctrl.locale = 'en';
-          ctrl.enLocale = { strings: {}, dynasties: {}, milestones: {}, corridors: {}, dict: {} };
+          ctrl._setEnglishLocale({ strings: {}, dynasties: {}, milestones: {}, corridors: {}, dict: {} });
           ctrl._lastLegendSnap = null;
           ctrl._lastLegendKey = null;
           ControllerClass.prototype._renderLegendBox.call(ctrl, zgSnap0);
@@ -6550,7 +7247,7 @@ function main() {
             String(ctrl._lastLegendKey).includes(':en-pending:'),
             `Cold-boot _renderLegendBox before i18n_dict.js loads must tag _lastLegendKey with en-pending, got "${ctrl._lastLegendKey}"`
           );
-          ctrl.enLocale = savedEn;
+          ctrl._setEnglishLocale(savedEn);
           ControllerClass.prototype._renderLegendBox.call(ctrl, zgSnap0);
           assert(
             String(ctrl._lastLegendKey).includes(':en:') &&
@@ -6708,12 +7405,12 @@ function main() {
           assert(qHits.some((h) => h.titleZh === expAnc), `Expected quick search "${aliasQ}" to hit "${expAnc}"`);
         }
 
-        // CUJ 42: Search Empty-State Solo Preservation + Dual-Person Discovery
+        // CUJ 42: Search Empty-State Solo Preservation + Multi-Person (2–3 Person) Discovery
         ctrl.locale = 'zh';
         const scPool = ctrl._getSearchShowcasePool();
         assert(
-          scPool.length === 14 && scPool[0].kind === 'person' && scPool[0].personKey === 'sushi',
-          `Showcase pool must default to solo Su Shi at index 0 and contain 14 entries, got ${scPool.length}`
+          scPool.length === 16 && scPool[0].kind === 'person' && scPool[0].personKey === 'sushi',
+          `Showcase pool must default to solo Su Shi at index 0 and contain 16 entries, got ${scPool.length}`
         );
         for (const soloKey of [
           'sushi',
@@ -6732,36 +7429,43 @@ function main() {
             `Showcase pool must preserve solo figure "${soloKey}"`
           );
         }
-        for (const pairKey of ['libai,dufu', 'yanghu,duyu', 'zuti,liukun', 'zhugeliang,simayi']) {
+        for (const pairKey of [
+          'libai,dufu',
+          'libai,dufu,gaoshi',
+          'caocao,liubei,sunquan',
+          'yanghu,duyu',
+          'zuti,liukun',
+          'zhugeliang,simayi',
+        ]) {
           const hit = scPool.find(
             (item) => item.kind === 'multi_person' && item.personKeys.join(',') === pairKey
           );
-          assert(hit, `Showcase pool must include dual-person encounter "${pairKey}"`);
+          assert(hit, `Showcase pool must include multi-person encounter "${pairKey}"`);
           assert(
             !/[\u4e00-\u9fff]/.test(hit.titleEn) && !/[\u4e00-\u9fff]/.test(hit.subEn),
-            `Dual showcase "${pairKey}" must have CJK-free English strings: ${hit.titleEn} / ${hit.subEn}`
+            `Multi-person showcase "${pairKey}" must have CJK-free English strings: ${hit.titleEn} / ${hit.subEn}`
           );
         }
         const zhChips = Array.from(ctrl._getSearchSampleQueries());
-        assert.deepStrictEqual(zhChips, ['长安', '赤壁', '霍去病', '李白 杜甫']);
+        assert.deepStrictEqual(zhChips, ['长安', '赤壁', '霍去病', '李白 杜甫 高适']);
         assert.strictEqual(ctrl._queryQuickSearch('霍去病')[0].kind, 'person');
-        assert.strictEqual(ctrl._queryQuickSearch('李白 杜甫')[0].kind, 'multi_person');
+        assert.strictEqual(ctrl._queryQuickSearch('李白 杜甫 高适')[0].kind, 'multi_person');
         assert(
           ctrl._searchPlaceholder(false).length <= 22 &&
-            ctrl._searchPlaceholder(true).includes('李白 杜甫'),
-          'Chinese compact placeholder must fit 248px pill while expanded placeholder hints dual-person syntax'
+            ctrl._searchPlaceholder(true).includes('李白 杜甫 高适'),
+          'Chinese compact placeholder must fit 248px pill while expanded placeholder hints 2–3 person syntax'
         );
 
         ctrl.locale = 'en';
         const enChips = Array.from(ctrl._getSearchSampleQueries());
-        assert.deepStrictEqual(enChips, ["Chang'an", 'Chibi', 'Cao Cao', 'Li Bai, Du Fu']);
+        assert.deepStrictEqual(enChips, ["Chang'an", 'Chibi', 'Cao Cao', 'Li Bai, Du Fu, Gao Shi']);
         assert.strictEqual(ctrl._queryQuickSearch('Cao Cao')[0].kind, 'person');
-        const enPairHit = ctrl._queryQuickSearch('Li Bai, Du Fu')[0];
+        const enPairHit = ctrl._queryQuickSearch('Li Bai, Du Fu, Gao Shi')[0];
         assert(
           enPairHit &&
             enPairHit.kind === 'multi_person' &&
-            enPairHit.titleEn === 'Li Bai × Du Fu',
-          `English dual-person chip "Li Bai, Du Fu" must resolve cleanly to Li Bai × Du Fu, got ${JSON.stringify(enPairHit)}`
+            enPairHit.titleEn === 'Li Bai × Du Fu × Gao Shi',
+          `English multi-person chip "Li Bai, Du Fu, Gao Shi" must resolve cleanly to Li Bai × Du Fu × Gao Shi, got ${JSON.stringify(enPairHit)}`
         );
         assert(
           !/[\u4e00-\u9fff]/.test(ctrl._searchPlaceholder(false)) &&
@@ -6772,7 +7476,7 @@ function main() {
 
         // CUJ 43: Polity focus — per-regime profile (割据/并立政权) inside the chronicle pane
         const polProfiles = loreData.POLITY_PROFILES || [];
-        assert(polProfiles.length >= 60, `Expected >= 60 curated polity profiles, got ${polProfiles.length}`);
+        assert(polProfiles.length >= 105, `Expected >= 105 curated polity profiles, got ${polProfiles.length}`);
         const polKeySet = new Set();
         for (const p of polProfiles) {
           assert(!polKeySet.has(p.key), `Duplicate polity key ${p.key}`);
@@ -6784,6 +7488,16 @@ function main() {
           assert(
             !/[\u4e00-\u9fff]/.test(`${p.en}${p.seatEn}${p.summaryEn}${p.rulersEn || ''}`),
             `Polity ${p.key} English fields must be CJK-free`
+          );
+          const pDesc = { ...p, curated: true };
+          assert(
+            Boolean(ctrl._polityRulers(pDesc)),
+            `Polity ${p.key} must expose non-empty ruler lineage via rulersZh/rulersEn or monarchPrefix`
+          );
+          const pEvents = ctrl._polityEvents(pDesc);
+          assert(
+            pEvents.length >= 3,
+            `Curated polity ${p.key} (${p.zh}) must surface >= 3 historical events, got ${pEvents.length}`
           );
           if (!FAST_MODE) {
             assert(
@@ -7103,15 +7817,14 @@ function main() {
         }
       }
 
-      // CUJ 42: Mobile Layout & Collapsed Chronicle Seat Bar Non-Occlusion Invariants
+      // CUJ 42: Mobile Layout & Single-Row Collapsed Chronicle Bar Non-Occlusion Invariants
       assert(
         !cssSrc.includes('grid-template-rows: 1fr 40px') &&
           cssSrc.includes('grid-template-rows: 1fr auto') &&
-          cssSrc.includes('#workspace-body:not(.is-mobile-chronicle-open) #chronicle-pane #dynasty-seat') &&
-          cssSrc.includes('flex: 0 0 100%') &&
-          cssSrc.includes('overflow-wrap: anywhere') &&
+          cssSrc.includes('#workspace-body:not(.is-mobile-chronicle-open) #chronicle-pane .seat-row') &&
+          cssSrc.includes('#workspace-body.is-mobile-chronicle-open #chronicle-pane #dynasty-seat') &&
           cssSrc.includes('#viewport-frame:has(#milestone-balloon:not(.is-hidden)) .settlement-node .cap-hint-tag'),
-        'css/style.css must use auto-height 2-row mobile chronicle banner with full-width wrapping #dynasty-seat and hide .cap-hint-tag when #milestone-balloon is active'
+        'css/style.css must use single-row collapsed mobile chronicle bar (hiding .seat-row until expanded) and hide .cap-hint-tag when #milestone-balloon is active'
       );
 
       // CUJ 43: Wu Zhou (武周, 690–705) Interregnum Snapshots, Shendu Luoyang Capital & Polity Profile
@@ -7496,7 +8209,420 @@ function main() {
           !vpCls.contains('is-camera-moving'),
           '_finishCameraMotion must remove is-camera-moving from #viewport-frame'
         );
+
+        // 44d. Issue #196 follow-up: modern province boundary topology simplification, regional tiling, terrain fill:none hit targets, and butt/bevel caps
+        const grpProv = makeEl('g');
+        const grpProvNames = makeEl('g');
+        const provCtrl = Object.assign(Object.create(proto), {
+          locale: 'zh',
+          enLocale: { terms: {}, dynasties: {} },
+          projector: testProj,
+          provinces,
+          grpProvinces: grpProv,
+          grpProvNames,
+          _svgNode(tag, attrs, parent) {
+            const n = makeEl(tag);
+            for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, v);
+            if (parent) parent.appendChild(n);
+            return n;
+          },
+        });
+        provCtrl._buildModernProvinces();
+        const pb = provCtrl._buildProvinceBoundaryPaths();
+        let rawFillCmds = 0;
+        let simpFillCmds = 0;
+        const nonDashProvs = provinces.filter((p) => !String(p.code).includes('_JD'));
+        for (const p of nonDashProvs) {
+          const rawD = testProj.multiRingsToSvgPath(p.rings);
+          const simpD = pb.provPaths.get(p) || '';
+          assert(
+            simpD.startsWith('M') && simpD.endsWith('Z'),
+            `Expected topology-simplified polygon path for ${p.title} to be a valid closed SVG path`
+          );
+          rawFillCmds += (rawD.match(/L/g) || []).length;
+          simpFillCmds += (simpD.match(/L/g) || []).length;
+        }
+        assert(
+          pb.provPaths.size === nonDashProvs.length && simpFillCmds < rawFillCmds * 0.5,
+          `Expected province polygon RDP simplification to cover all ${nonDashProvs.length} provinces and shrink vertices by >50% (got simpFillCmds=${simpFillCmds} vs rawFillCmds=${rawFillCmds})`
+        );
+        const boundCmds = (pb.combined.match(/L/g) || []).length;
+        const boundMoves = (pb.combined.match(/M/g) || []).length;
+        assert(
+          boundCmds > 800 && boundCmds < rawFillCmds * 0.35,
+          `Expected deduplicated+simplified province boundary commands to shrink >65% vs raw rings (got boundCmds=${boundCmds} vs rawFillCmds=${rawFillCmds})`
+        );
+        console.log(
+          `  [perf #196] modern provinces: fillL ${rawFillCmds} -> ${simpFillCmds} (-${((1 - simpFillCmds / rawFillCmds) * 100).toFixed(1)}%), boundaryL=${boundCmds} (M=${boundMoves}, intBytes=${pb.interior.length}, outBytes=${pb.outer.length}, tiles=${pb.tiles.length})`
+        );
+        const casingEls = grpProv.querySelectorAll('.province-boundary-casing');
+        const intEls = grpProv.querySelectorAll('.province-boundary-interior');
+        const outEls = grpProv.querySelectorAll('.province-boundary-outer');
+        const dashEls = grpProv.querySelectorAll('.maritime-dash');
+        assert(
+          casingEls.length >= 4 &&
+            intEls.length >= 4 &&
+            outEls.length >= 4 &&
+            dashEls.length >= 1 &&
+            grpProvNames.children.length === nonDashProvs.length,
+          `Expected _buildModernProvinces to emit regional tiled boundary paths plus ${nonDashProvs.length} labels (casing=${casingEls.length}, interior=${intEls.length}, outer=${outEls.length}, dash=${dashEls.length})`
+        );
+        const lastCasingIdx = grpProv.children.indexOf(casingEls[casingEls.length - 1]);
+        const firstIntIdx = grpProv.children.indexOf(intEls[0]);
+        const lastOutIdx = grpProv.children.indexOf(outEls[outEls.length - 1]);
+        const firstDashIdx = grpProv.children.indexOf(dashEls[0]);
+        assert(
+          lastCasingIdx < firstIntIdx && firstIntIdx < lastOutIdx && lastOutIdx < firstDashIdx,
+          'Province z-order must stack casing tiles below interior/outer tiles and maritime-dash on top'
+        );
+        const terrainProvRule = cssSrc.match(
+          /#atlas-svg\.terrain-active\s+\.province-shape:not\(\.maritime-dash\)\s*\{([^}]+)\}/
+        );
+        assert(
+          terrainProvRule &&
+            /fill:\s*none\s*;/.test(terrainProvRule[1]) &&
+            /pointer-events:\s*fill\s*;/.test(terrainProvRule[1]) &&
+            cssSrc.includes('#atlas-svg.is-camera-moving .province-boundary-casing') &&
+            cssSrc.includes('stroke-linecap: butt;') &&
+            cssSrc.includes('stroke-linejoin: bevel;'),
+          'css/style.css must eliminate terrain-mode .province-shape fills, switch boundary caps/joins to butt/bevel, and hide .province-boundary-casing during camera motion'
+        );
       }
+
+      // CUJ 45: Issue #205 — Historically accurate Taiwan naming across all 185 snapshots & locales
+      {
+        const conv = sandbox.window.ZH_HANT_CONV;
+        assert.strictEqual(conv.toHant('台湾（荷占）'), '臺灣（荷佔）');
+        assert.strictEqual(conv.toHant('臺灣（荷佔）'), '臺灣（荷佔）');
+        assert.strictEqual(conv.toHans('臺灣（荷佔）'), '台湾（荷占）');
+        assert.strictEqual(conv.toHant('承天府（东宁）'), '承天府（東寧）');
+        assert.strictEqual(conv.toHant('瑠求'), '瑠求');
+
+        for (const [sk, snap] of Object.entries(snapshots)) {
+          if (!snap || Array.isArray(snap)) continue;
+          for (const grp of ['polities', 'regions', 'prefectures']) {
+            for (const f of snap[grp] || []) {
+              assert(
+                f.title !== '台湾原住民' && f.title !== '台湾（日本占领）',
+                `Stale anachronistic Taiwan label "${f.title}" found in ${sk}.${grp}`
+              );
+            }
+          }
+        }
+        for (const bsKey of ['s_zhanguo_a', 's_qin_a']) {
+          for (const f of bootSnapshots[bsKey].polities || []) {
+            assert(f.title !== '台湾原住民', `atlas_boot.js ${bsKey} still contains 台湾原住民`);
+          }
+        }
+
+        const earlyMingSet = new Set([
+          's_ming_0a', 's_ming_0b', 's_ming_0c', 's_ming_0d',
+          's_ming_a0', 's_ming_a', 's_ming_a2', 's_ming_b0',
+        ]);
+        const lateMingDutchSet = new Set(['s_ming_c0', 's_ming_c', 's_ming_c2']);
+        const qingDutchSet = new Set(['s_qing_a00', 's_qing_a0']);
+        const qingMingZhengSet = new Set(['s_qing_a0b', 's_qing_a1', 's_qing_a', 's_qing_a2']);
+        const qingRuleSet = new Set([
+          's_qing_b1', 's_qing_b', 's_qing_c', 's_qing_d',
+          's_qing_e', 's_qing_e2', 's_qing_e3', 's_qing_e4',
+          's_qing_f0', 's_qing_f',
+        ]);
+        const jpOccSet = new Set([
+          's_qing_g0', 's_qing_g',
+          's_roc_a0', 's_roc_w1', 's_roc_w2', 's_roc_w3', 's_roc_w4',
+          's_roc_a', 's_roc_b0', 's_roc',
+        ]);
+        const rocPost45Set = new Set(['s_roc_c', 's_roc_d']);
+        const ptInShape = sandbox.window.MercatorProjector.pointInShape;
+
+        for (const [sk, snap] of Object.entries(snapshots)) {
+          if (!snap || Array.isArray(snap) || sk === 's_prc') continue;
+          for (const [tx, ty] of [[120.21, 23.0], [120.95, 23.75]]) {
+            const pHits = (snap.polities || []).filter((p) => ptInShape(tx, ty, p.shape)).map((p) => p.title);
+            const rHits = (snap.regions || []).filter((r) => ptInShape(tx, ty, r.shape)).map((r) => r.title);
+            const fHits = (snap.prefectures || []).filter((f) => ptInShape(tx, ty, f.shape)).map((f) => f.title);
+            assert.strictEqual(pHits.length, 1, `${sk} at [${tx},${ty}] must match exactly 1 polity, got [${pHits.join(',')}]`);
+
+            let expPol = null;
+            let expReg = [];
+            let expPref = [];
+            if (/^s_(zhanguo|qin|xihan|donghan)(_|$)/.test(sk)) expPol = '岛夷诸部';
+            else if (/^s_(sanguo|xijin|dongjin|nanbei)(_|$)/.test(sk)) expPol = '夷洲';
+            else if (/^s_(sui|tang|wudai|beisong|nansong)(_|$)/.test(sk)) expPol = '流求';
+            else if (/^s_yuan(_|$)/.test(sk)) expPol = '瑠求';
+            else if (earlyMingSet.has(sk)) expPol = '小琉球';
+            else if (sk === 's_ming_b') expPol = '东番';
+            else if (lateMingDutchSet.has(sk) || qingDutchSet.has(sk)) expPol = '台湾（荷占）';
+            else if (qingMingZhengSet.has(sk)) {
+              expPol = '南明（明郑）';
+              expPref = ['承天府（东宁）'];
+            } else if (qingRuleSet.has(sk)) {
+              expPol = '清';
+              expReg = ['台湾'];
+              expPref = ['台湾府'];
+            } else if (jpOccSet.has(sk)) {
+              expPol = '台湾（日占）';
+            } else if (rocPost45Set.has(sk)) {
+              expPol = '中华民国';
+              expReg = ['台湾'];
+            }
+            assert.strictEqual(pHits[0], expPol, `${sk} Taiwan polity expected "${expPol}", got "${pHits[0]}"`);
+            assert.deepStrictEqual(Array.from(rHits), expReg, `${sk} Taiwan regions expected ${JSON.stringify(expReg)}, got ${JSON.stringify(rHits)}`);
+            assert.deepStrictEqual(Array.from(fHits), expPref, `${sk} Taiwan prefectures expected ${JSON.stringify(expPref)}, got ${JSON.stringify(fHits)}`);
+          }
+        }
+
+        const dutchPol1630 = ctrl._resolvePolity('台湾（荷占）', 1630);
+        const dutchPol1650 = ctrl._resolvePolity('台湾（荷占）', 1650);
+        const mzPol1670 = ctrl._resolvePolity('南明（明郑）', 1670);
+        assert(
+          dutchPol1630 && dutchPol1630.key === 'taiwan_dutch' &&
+          dutchPol1650 && dutchPol1650.key === 'taiwan_dutch' &&
+          mzPol1670 && mzPol1670.key === 'mingzheng',
+          'Expected polity encyclopedia profiles to resolve 台湾（荷占） (1630/1650) and 南明（明郑） (1670)'
+        );
+
+        ctrl._searchIndex = null;
+        for (const q of ['夷洲', '流求', '瑠求', '小琉球', '东番', '东宁', '赤嵌', 'tayouan']) {
+          if (!['tayouan'].includes(q)) {
+            const rp = ctrl.resolvePlace(q, 1650);
+            assert(
+              rp && Math.abs(rp.lng - 120.21) < 0.2 && Math.abs(rp.lat - 23.0) < 0.2,
+              `resolvePlace("${q}") failed: ${JSON.stringify(rp)}`
+            );
+          }
+          const sh = ctrl._queryQuickSearch(q);
+          assert(sh.length > 0, `_queryQuickSearch("${q}") returned empty`);
+        }
+
+        const twEraSamples = [
+          [-300, '岛夷诸部', null, 'Island Yi Tribes', '島夷諸部'],
+          [100, '岛夷诸部', null, 'Island Yi Tribes', '島夷諸部'],
+          [230, '夷洲', null, 'Yizhou', '夷洲'],
+          [700, '流求', null, 'Liuqiu', '流求'],
+          [1300, '瑠求', null, 'Liuqiu', '瑠求'],
+          [1410, '小琉球', null, 'Xiaoliuqiu', '小琉球'],
+          [1603, '东番', null, 'Dongfan', '東番'],
+          [1630, '台湾（荷占）', null, 'Taiwan (Dutch-ruled)', '臺灣（荷佔）'],
+          [1650, '台湾（荷占）', null, 'Taiwan (Dutch-ruled)', '臺灣（荷佔）'],
+          [1670, '南明（明郑）', '承天府（东宁）(府)', 'Southern Ming (Koxinga / Tungning)', '南明（明鄭）'],
+          [1750, '清', '台湾府', 'Qing', '清'],
+          [1900, '台湾（日占）', null, 'Taiwan (Japanese-occupied)', '臺灣（日佔）'],
+          [1920, '台湾（日占）', null, 'Taiwan (Japanese-occupied)', '臺灣（日佔）'],
+          [1947, '中华民国', null, 'Republic of China', '中華民國'],
+          [2026, '中华人民共和国', '台南', "People's Republic of China", '中華人民共和國'],
+        ];
+        const savedLoc = ctrl.locale;
+        for (const [yr, zhPol, zhPref, enPol, twPol] of twEraSamples) {
+          ctrl.locale = 'zh';
+          const izh = ctrl.inspect({ year: yr, lng: 120.21, lat: 23.0 });
+          assert.strictEqual(izh.polity, zhPol, `inspect(${yr}, zh) polity expected "${zhPol}", got "${izh.polity}"`);
+          if (zhPref) {
+            assert(izh.prefectures.includes(zhPref), `inspect(${yr}, zh) expected prefecture "${zhPref}", got ${JSON.stringify(izh.prefectures)}`);
+          } else {
+            assert.strictEqual(izh.prefectures.length, 0, `inspect(${yr}, zh) expected 0 prefectures, got ${JSON.stringify(izh.prefectures)}`);
+          }
+          ctrl.locale = 'en';
+          const ien = ctrl.inspect({ year: yr, lng: 120.21, lat: 23.0 });
+          assert.strictEqual(ien.polity, enPol, `inspect(${yr}, en) polity expected "${enPol}", got "${ien.polity}"`);
+          assert(!/[\u4e00-\u9fff]/.test(JSON.stringify(ien)), `CJK leak in inspect(${yr}, en): ${JSON.stringify(ien)}`);
+          ctrl.locale = 'zh-tw';
+          const itw = ctrl.inspect({ year: yr, lng: 120.21, lat: 23.0 });
+          assert.strictEqual(itw.polity, twPol, `inspect(${yr}, zh-tw) polity expected "${twPol}", got "${itw.polity}"`);
+        }
+        ctrl.locale = savedLoc;
+      }
+    }
+  }
+
+  // Verify 1901 Boxer Protocol milestone, Gengshi/Liu Xiu dissolved seams, and Five Dynasties Jiaozhou/Liaoxi/Hetao fixes
+  {
+    const qingDyn = dynasties.find((d) => d.key === 'qing');
+    const m1901 = qingDyn && qingDyn.milestones.find((m) => m.year === 1901);
+    assert(m1901 && m1901.headline.includes('辛丑条约'), 'qing:1901 Boxer Protocol milestone must exist');
+    const rocDyn = dynasties.find((d) => d.key === 'roc');
+    const m1912 = rocDyn && rocDyn.milestones.find((m) => m.year === 1912);
+    assert(m1912 && m1912.headline.includes('清帝溥仪退位'), 'roc:1912 milestone must include Qing abdication');
+
+    const gs23 = snapshots.s_xihan_e.polities.find((p) => p.title === '更始（汉）');
+    const lx23 = snapshots.s_xihan_e.polities.find((p) => p.title === '刘秀（河北）');
+    assert(gs23.shape.coordinates.length <= 6, 's_xihan_e 更始（汉） must keep its mainland dissolved (no extra seam pieces)');
+    assert.strictEqual(lx23.shape.type, 'Polygon', 's_xihan_e 刘秀（河北） must be a single dissolved Polygon');
+
+    for (const sid of ['s_tang_d2', 's_wudai_a', 's_wudai_b1', 's_wudai_b', 's_wudai_b2', 's_wudai_c0']) {
+      assert(
+        snapshots[sid].polities.some((p) => p.title === '静海军（交州）'),
+        `${sid} must include 静海军（交州）`
+      );
+    }
+    for (const sid of ['s_wudai_c', 's_wudai_c2', 's_wudai_d', 's_wudai_e', 's_wudai_e1', 's_wudai_e2']) {
+      assert(
+        snapshots[sid].polities.some((p) => p.title === '安南'),
+        `${sid} must include 安南`
+      );
+    }
+    const chuA = snapshots.s_wudai_a.polities.find((p) => p.title === '楚 · 荆南');
+    assert.strictEqual(chuA.shape.type, 'Polygon', 's_wudai_a 楚 · 荆南 must be a single dissolved Polygon');
+
+    for (const [sid, title, maxPieces] of [
+      ['s_yuan_b', '元', 3],
+      ['s_yuan_b', '天完 · 陈友谅', 1],
+      ['s_yuan_c', '元', 4],
+      ['s_yuan_c', '吴（朱元璋）', 1],
+      ['s_ming_0a', '北元', 1],
+      ['s_ming_0a', '明', 2],
+      ['s_ming_0b', '明', 3],
+      ['s_sui_d', '魏（李密）', 1],
+      ['s_tang_0', '梁（萧铣）', 1],
+      ['s_tang_0', '吴（杜伏威）', 1],
+      ['s_tang_d1', '大齐（黄巢）', 1],
+    ]) {
+      const pol = snapshots[sid].polities.find((p) => p.title === title);
+      assert(pol && pol.shape, `${sid} ${title} must exist`);
+      const pieces = pol.shape.type === 'MultiPolygon' ? pol.shape.coordinates.length : 1;
+      assert(pieces <= maxPieces, `${sid} ${title} must be dissolved to <= ${maxPieces} pieces (got ${pieces})`);
+    }
+    assert.strictEqual(ctrl._resolveSnapKey(qinDyn, -210), 's_qin', 'Qin at -210 BCE must resolve to s_qin');
+    assert.strictEqual(ctrl._resolveSnapKey(qinDyn, -209), 's_qin_c', 'Qin at -209 BCE must resolve to s_qin_c');
+    assert.strictEqual(ctrl._resolveSnapKey(qinDyn, -207), 's_qin_d', 'Qin at -207 BCE must resolve to s_qin_d');
+    assert.strictEqual(ctrl._resolveSnapKey(qinDyn, -206), 's_qin_chuhan', 'Qin at -206 BCE must resolve to s_qin_chuhan');
+    assert(
+      snapshots.s_qin_c.polities.some((p) => p.title === '秦') &&
+        snapshots.s_qin_c.polities.some((p) => p.title === '楚（张楚 · 怀王）') &&
+        !snapshots.s_qin_c.polities.some((p) => p.title === '南越（赵佗）'),
+      's_qin_c (-209..-208 BCE) must show Qin (holding Lingnan) and restored Chu/Six Kingdoms before Zhao Tuo secedes'
+    );
+    assert(
+      snapshots.s_qin_d.polities.some((p) => p.title === '秦') &&
+        snapshots.s_qin_d.polities.some((p) => p.title === '楚（怀王 · 项羽）') &&
+        snapshots.s_qin_d.polities.some((p) => p.title === '南越（赵佗）'),
+      's_qin_d (-207 BCE) must show Qin, Chu (King Huai & Xiang Yu), and Zhao Tuo Nanyue in Lingnan'
+    );
+
+    // Southern Dynasties, Ten Kingdoms, Late Tang & Western Han curated milestone/landmark split
+    for (const [dk, yr, kw] of [
+      ['nanbei', 551, '陈霸先'],
+      ['nanbei', 578, '吕梁之战'],
+      ['tang', 783, '泾原兵变'],
+      ['wudai', 910, '钱镠'],
+      ['wudai', 927, '马殷'],
+    ]) {
+      const d = dynasties.find((x) => x.key === dk);
+      const m = d && d.milestones.find((x) => x.year === yr);
+      assert(m && m.headline.includes(kw), `Expected timeline milestone ${dk}:${yr} containing "${kw}"`);
+      assert.strictEqual(ctrl._getMilestoneAnchors(d, m).length, 2, `Expected 2 spatial anchors on ${dk}:${yr}`);
+    }
+    const xihanDyn = dynasties.find((x) => x.key === 'xihan');
+    const changanXihanEvs = ctrl._collectPlaceEventsForDynasty(xihanDyn, 108.941, 34.341, null);
+    assert(
+      changanXihanEvs.some((e) => e.year === -81 && e.text.includes('苏武')) &&
+        changanXihanEvs.some((e) => e.year === -81 && e.text.includes('盐铁会议')) &&
+        changanXihanEvs.some((e) => e.year === -2 && e.text.includes('浮屠经')),
+      'Western Han Chang\'an place events must preserve both 81 BCE landmarks (Su Wu & Salt-and-Iron Debate) and 2 BCE Buddhist transmission'
+    );
+
+    // Issue #222: Zero-widening compact timeline band fallback (_fitBandLabels)
+    const makeBandCell = (clientWidth, regularWidth, compactWidth) => {
+      const classes = new Set();
+      const clsList = {
+        add: (...names) => names.forEach((n) => classes.add(n)),
+        remove: (...names) => names.forEach((n) => classes.delete(n)),
+        toggle: (n, force) => (force === undefined ? (classes.has(n) ? classes.delete(n) : classes.add(n)) : force ? classes.add(n) : classes.delete(n)),
+        contains: (n) => classes.has(n),
+      };
+      const lbl = {
+        get scrollWidth() {
+          return classes.has('is-compact') ? compactWidth : regularWidth;
+        },
+      };
+      return {
+        clientWidth,
+        scrollWidth: regularWidth,
+        classList: clsList,
+        querySelector: (sel) => (sel === '.band-label' ? lbl : null),
+      };
+    };
+    const cell1440 = makeBandCell(27, 25, 21); // 1440px laptop: fits at full 12px
+    const cell1280 = makeBandCell(23, 25, 21); // 1280px laptop: fits via .is-compact
+    const cellMob = makeBandCell(9, 25, 21);   // 390px mobile: cleanly hides via .is-narrow
+    const prevIdFn = ctrl._id;
+    ctrl._id = (id) => {
+      if (id === 'dynasty-bands') return { children: [cell1440, cell1280, cellMob] };
+      if (id === 'scrubber-ticks') return { children: [] };
+      return null;
+    };
+    ctrl._fitBandLabels();
+    ctrl._id = prevIdFn;
+    assert(
+      !cell1440.classList.contains('is-compact') && !cell1440.classList.contains('is-narrow'),
+      '1440px short dynasty cell (27px vs 25px text) must render at full 12px without hiding'
+    );
+    assert(
+      cell1280.classList.contains('is-compact') && !cell1280.classList.contains('is-narrow'),
+      '1280px short dynasty cell (23px) must step into .is-compact (21px) without hiding'
+    );
+    assert(
+      !cellMob.classList.contains('is-compact') && cellMob.classList.contains('is-narrow'),
+      'Mobile ultra-narrow dynasty cell (9px) must hide cleanly via .is-narrow'
+    );
+
+    // 6-era boundary & gap regression checks (195 Donghan, 322 Dongjin, 676 Tang, 1410 Ming, 1650 Qing, 1918 ROC)
+    const ptIn = sandbox.window.MercatorProjector.pointInShape;
+    const dz195 = snapshots.s_donghan_d1.polities.find((p) => p.title === '董卓(长安)');
+    const mt195 = snapshots.s_donghan_d1.polities.find((p) => p.title === '马腾(凉州)');
+    assert(
+      !ptIn(106.5, 38.0, dz195.shape) && ptIn(106.5, 38.0, mt195.shape),
+      's_donghan_d1 (195 CE): Northern Ningxia [106.5, 38.0] must belong to 马腾(凉州), not a Dong Zhuo horn'
+    );
+    for (const [sk, mainTitle] of [['s_tang_a', '唐'], ['s_tang_wz1', '武周']]) {
+      const mPol = snapshots[sk].polities.find((p) => p.title === mainTitle);
+      assert(ptIn(120.5, 41.2, mPol.shape), `${sk}: Yingzhou / Liaoxi Corridor [120.5, 41.2] must be inside ${mainTitle}`);
+    }
+    for (const [sk, fengTitle] of [
+      ['s_roc_w1', '奉系（张作霖）'],
+      ['s_roc_w2', '奉系（张作霖）'],
+      ['s_roc_w3', '北洋政府 · 奉系（张作霖）'],
+      ['s_roc_w4', '安国军政府 · 奉系（张作霖）'],
+    ]) {
+      const fPol = snapshots[sk].polities.find((p) => p.title === fengTitle);
+      assert(
+        fPol && ptIn(120.0, 49.2, fPol.shape) && ptIn(121.5, 46.0, fPol.shape),
+        `${sk}: Hulunbuir [120.0, 49.2] and Hinggan [121.5, 46.0] must be covered by ${fengTitle} (no hollow gap)`
+      );
+    }
+
+    // Dynasty transition & usurpation causality chain checks
+    for (const [dk, yr, kw, expAnchors] of [
+      ['zhanguo', -272, '义渠', 2],
+      ['qin', -221, '王贲受齐王建降', 1],
+      ['xihan', 6, '假皇帝', 1],
+      ['donghan', 216, '魏王', 2],
+      ['dongjin', 350, '石虎', 1],
+      ['dongjin', 414, '南凉', 2],
+      ['nanbei', 474, '新亭', 2],
+      ['nanbei', 479, '萧道成', 1],
+      ['nanbei', 500, '东昏侯', 2],
+      ['nanbei', 502, '萧衍', 1],
+      ['nanbei', 528, '尔朱荣', 1],
+      ['nanbei', 530, '孝庄帝', 2],
+      ['nanbei', 532, '韩陵之战', 2],
+      ['nanbei', 534, '宇文泰', 3],
+      ['nanbei', 550, '八柱国', 2],
+      ['nanbei', 557, '王僧辩', 2],
+      ['tang', 684, '徐敬业', 2],
+      ['tang', 904, '朱温劫唐昭宗', 2],
+      ['wudai', 923, '魏州', 1],
+      ['wudai', 942, '称孙不称臣', 1],
+      ['wudai', 947, '石重贵', 2],
+      ['wudai', 951, '后汉隐帝', 3],
+      ['nansong', 1141, '岳武穆', 1],
+      ['nansong', 1271, '阿里不哥', 1],
+      ['nansong', 1279, '陆秀夫', 1],
+    ]) {
+      const d = dynasties.find((x) => x.key === dk);
+      const m = d && d.milestones.find((x) => x.year === yr);
+      assert(m && m.headline.includes(kw), `Expected transition milestone ${dk}:${yr} containing "${kw}"`);
+      assert.strictEqual(ctrl._getMilestoneAnchors(d, m).length, expAnchors, `Expected ${expAnchors} anchors on ${dk}:${yr}`);
     }
   }
 

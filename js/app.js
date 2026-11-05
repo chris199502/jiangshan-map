@@ -18,12 +18,19 @@
   const SHAPE_BBOX_WEAK = new WeakMap();
   const SHAPE_SIG_WEAK = new WeakMap();
   const PREF_BOUNDARY_MESH_CACHE = new WeakMap();
+  const setSvgAttribute = (node, name, value) => {
+    const text = String(value);
+    if (node.getAttribute(name) !== text) node.setAttribute(name, text);
+  };
   // Regime prefixes carried by era-span names, e.g. '北魏正光' = '北魏' + era '正光'.
   const ERA_DYNASTY_PREFIXES = [
     '南朝宋', '南朝齐', '南朝梁', '南朝陈', '西汉', '东汉', '新莽', '西晋', '东晋',
     '北魏', '东魏', '西魏', '北齐', '北周', '西梁', '武周', '后梁', '后唐', '后晋', '后汉', '后周',
     '北宋', '南宋', '蜀汉', '西夏', '周', '秦', '汉', '魏', '吴', '晋', '宋', '齐', '梁', '陈', '隋', '唐', '辽', '金', '元', '明', '清',
   ];
+  const CORE_REGIME_CHARS = new Set(
+    '齐宋梁陈魏吴楚燕赵韩秦晋鲁巴蜀越周代夏凉唐汉郑顺'.split('')
+  );
   const ERA_CHAR_PINYIN = {
     威: 'wei', 烈: 'lie', 王: 'wang', 安: 'an', 显: 'xian', 慎: 'shen', 靓: 'jing', 赧: 'nan', 昭: 'zhao', 襄: 'xiang',
     孝: 'xiao', 文: 'wen', 庄: 'zhuang', 政: 'zheng', 始: 'shi', 皇: 'huang', 二: 'er', 世: 'shi', 高: 'gao', 帝: 'di',
@@ -66,16 +73,16 @@
     部: 'Tribal Division',
     侨州: 'Emigre Prefecture',
   };
-  // Timeline autoplay: the playhead crosses the scrubber bar at a constant speed (each
-  // dynasty gets time in proportion to its band width), lands on every milestone year,
-  // shows each callout for at least ~1 s, and holds on milestones that open a dynasty or
-  // are flagged isMapChange.
+  // Timeline autoplay is event-driven: the playhead jumps from one node to the next (every
+  // milestone year plus every territory-snapshot boundary) instead of crawling through the
+  // ~1,950 calendar years where nothing changes. An ordinary event stays up long enough to
+  // read its headline; a node that redraws the map (isMapChange, dynasty opening, snapshot
+  // switch) holds longer so the border diff can be seen. Playback speed scales the tick.
   const AUTOPLAY_TICK_MS = 280;
-  const AUTOPLAY_FULL_RUN_MS = 9 * 60 * 1000;
-  const AUTOPLAY_MIN_SHOW_TICKS = 4;
-  const AUTOPLAY_HOLD_TICKS = Math.round(2500 / AUTOPLAY_TICK_MS);
+  const AUTOPLAY_EVENT_TICKS = 4;
+  const AUTOPLAY_MAP_CHANGE_TICKS = 10;
   const PERSON_AUTOPLAY_STEP_MS = 2600;
-  const PLAY_SPEED_STEPS = [1, 2, 0.25, 0.5];
+  const PLAY_SPEED_STEPS = [1, 2, 4, 0.5];
 
   function escHtml(str) {
     return String(str == null ? '' : str)
@@ -370,13 +377,13 @@
       this._enLocalePromise = null;
       this._hydrateSnapshots();
 
-      this.enLocale = window.EN_LOCALE || {
+      this._setEnglishLocale(window.EN_LOCALE || {
         strings: {},
         dynasties: {},
         milestones: {},
         corridors: {},
         dict: {},
-      };
+      });
 
       this.projector = new MercatorProjector(1000, 700, {
         west: 66,
@@ -387,6 +394,10 @@
 
       this.minYear = this.dynasties[0].fromYear;
       this.maxYear = this.dynasties[this.dynasties.length - 1].toYear;
+      this.embed = this._parseEmbedParams(
+        typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams()
+      );
+      if (this.embed) this._applyEmbedYearRange();
       this._initTimelineBands();
 
       const rawLang = (new URLSearchParams(location.search).get('lang') || '').toLowerCase();
@@ -405,9 +416,7 @@
       this.playing = false;
       this.playSpeed = 1;
       this.playInterval = null;
-      this.playProgress = 0;
       this.playHoldTicks = 0;
-      this.playShownTicks = 0;
       this.musicPlaying = false;
       this.musicTrackIdx = 0;
       this.musicAudio = null;
@@ -470,8 +479,9 @@
         this.jumpToYear(this.dynasties[0].focusYear);
         this._bootDone = true;
         this._restoreFromQuery();
+        if (this.embed) this._initEmbedChrome();
       });
-      this._maybeShowStartGuide();
+      if (!this.embed) this._maybeShowStartGuide();
 
       if (typeof window !== 'undefined' && !this._fullSnapshotsLoaded) {
         setTimeout(() => this._ensureFullSnapshots(), 50);
@@ -619,7 +629,7 @@
         window.EN_LOCALE.dict &&
         Object.keys(window.EN_LOCALE.dict).length > 0
       ) {
-        this.enLocale = window.EN_LOCALE;
+        this._setEnglishLocale(window.EN_LOCALE);
         return Promise.resolve(this.enLocale);
       }
       if (!this._enLocalePromise) {
@@ -627,7 +637,7 @@
           this._lazyAssetUrl('js/i18n_dict.js', 'vI18n')
         ).then(() => {
           if (window.EN_LOCALE) {
-            this.enLocale = window.EN_LOCALE;
+            this._setEnglishLocale(window.EN_LOCALE);
             this.searchIndex = null;
           }
           return this.enLocale;
@@ -933,11 +943,13 @@
       return typeof res === 'string' ? res.replace(/\b([A-Z][a-z]+)\s+Zhou\b/g, '$1zhou') : res;
     }
 
+    _setEnglishLocale(locale) {
+      this.enLocale = locale;
+      this._enDictReady = Boolean(locale && locale.dict && Object.keys(locale.dict).length);
+    }
+
     _hasEnDict() {
-      const dict = this.enLocale && this.enLocale.dict;
-      if (!dict) return false;
-      for (const _ in dict) return true;
-      return false;
+      return this._enDictReady === true;
     }
 
     _getExtraEnTermMap() {
@@ -1369,6 +1381,7 @@
     }
 
     _syncUrlLangParam() {
+      if (this.embed) return;
       if (this._urlSyncArmed) {
         this._writeUrlState();
         return;
@@ -1430,6 +1443,7 @@
 
     _writeUrlState() {
       if (
+        this.embed ||
         typeof window === 'undefined' ||
         typeof location === 'undefined' ||
         !window.history ||
@@ -1463,7 +1477,7 @@
     // A clean home load must stay clean even if the intro animates the timeline, so syncing
     // starts only once the URL already carried state or the user has actually interacted.
     _armUrlSync(hasDeepLinkState) {
-      if (this._urlSyncArmed || typeof window === 'undefined') return;
+      if (this.embed || this._urlSyncArmed || typeof window === 'undefined') return;
       const arm = () => {
         if (this._urlSyncArmed) return;
         this._urlSyncArmed = true;
@@ -1474,6 +1488,165 @@
         return;
       }
       for (const t of ['pointerdown', 'keydown', 'wheel']) window.addEventListener(t, arm, true);
+    }
+
+    // ---------------- Embed mode (?embed=1) ----------------
+    // Other sites iframe the atlas with the same state params as share links. The main site gets
+    // no UI for this (it is documented in the README); everything below only runs inside an embed.
+    _parseEmbedParams(q) {
+      if (!q || q.get('embed') !== '1') return null;
+      const num = (k) => {
+        if (!q.has(k) || q.get(k) === '') return null;
+        const n = Math.round(Number(String(q.get(k)).split(',')[0]));
+        return Number.isFinite(n) ? n : null;
+      };
+      return {
+        from: num('from'),
+        to: num('to'),
+        lock: q.get('lock') === '1',
+        autoplay: q.get('autoplay') === '1',
+        year: num('year'),
+      };
+    }
+
+    // Narrow the global year bounds; every scrub, step, autoplay and deep link already clamps to them.
+    _applyEmbedYearRange() {
+      const lo = this.minYear;
+      const hi = this.maxYear;
+      const clamp = (y) => Math.max(lo, Math.min(hi, y));
+      let { from, to } = this.embed;
+      if (this.embed.lock && this.embed.year !== null) {
+        from = this.embed.year;
+        to = this.embed.year;
+      }
+      if (from === null && to === null) return;
+      from = clamp(from === null ? lo : from);
+      to = clamp(to === null ? hi : to);
+      if (from > to) [from, to] = [to, from];
+      this.minYear = from;
+      this.maxYear = to;
+      if (from > lo || to < hi) this._bandClip = [from, to];
+    }
+
+    // The host page's address bar is not ours, and the link out must drop the embed params.
+    _embedOpenUrl() {
+      const qs = this._urlStateParams().toString().replace(/%2C/gi, ',');
+      const base = typeof location !== 'undefined' ? `${location.origin}${location.pathname}` : '';
+      return `${base}${qs ? `?${qs}` : ''}`;
+    }
+
+    _syncEmbedBadge() {
+      if (!this.embed) return;
+      const titleEl = this._id('embed-badge-title');
+      if (!titleEl) return;
+      const en = this.locale === 'en';
+      const person = this.activePerson;
+      let title;
+      if (person && Array.isArray(person.profiles) && person.profiles.length) {
+        title = person.profiles.map((p) => (en ? p.en : this._zh(p.zh))).join(en ? ' & ' : ' × ');
+      } else if (this.activePolity && this.activePolity.curated) {
+        const name = en ? this.activePolity.en : this._zh(this.activePolity.zh);
+        title = `${this.formatYear(this.year)} · ${name}`;
+      } else {
+        title = `${this.formatYear(this.year)} · ${this.formatEraLabel(this.year, this.dynasties[this.dynastyIdx])}`;
+      }
+      titleEl.textContent = title;
+    }
+
+    _initEmbedChrome() {
+      if (typeof document === 'undefined') return;
+      const root = document.documentElement;
+      root.classList.add('is-embed');
+      if (this.embed.lock) {
+        root.classList.add('is-embed-locked');
+        if (this.embed.year === null) {
+          this.minYear = this.year;
+          this.maxYear = this.year;
+        }
+      }
+      const frame = this._id('viewport-frame');
+      if (!frame) return;
+      const en = this.locale === 'en';
+      const make = (tag, id, cls, text) => {
+        const el = document.createElement(tag);
+        el.id = id;
+        if (cls) el.className = cls;
+        if (text) el.textContent = text;
+        return el;
+      };
+
+      // Until clicked, the shield keeps map gestures away from the atlas but leaves default
+      // scrolling alone, so a reader scrolling the host article never gets stuck zooming the map.
+      const shield = make('div', 'embed-shield', '');
+      shield.setAttribute('role', 'button');
+      shield.tabIndex = 0;
+      shield.appendChild(
+        make('span', '', 'embed-shield-hint', en ? 'Click to interact with the map' : this._zh('点击以操作地图'))
+      );
+      const swallow = (e) => e.stopPropagation();
+      for (const t of ['pointerdown', 'pointermove', 'pointerup', 'mousedown', 'touchstart', 'touchmove', 'wheel', 'dblclick']) {
+        shield.addEventListener(t, swallow);
+      }
+      const activate = () => {
+        this._embedActive = true;
+        shield.classList.add('is-hidden');
+      };
+      shield.addEventListener('click', (e) => {
+        e.stopPropagation();
+        activate();
+      });
+      shield.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        activate();
+      });
+      root.addEventListener('mouseleave', () => {
+        this._embedActive = false;
+        shield.classList.remove('is-hidden');
+      });
+      frame.appendChild(shield);
+
+      const badge = make('div', 'embed-badge', 'embed-chip');
+      badge.appendChild(make('span', '', 'embed-seal', this.uiStr('brand_seal', '江山时序')));
+      badge.appendChild(make('span', '', 'embed-sep'));
+      badge.appendChild(make('span', 'embed-badge-title', 'embed-title'));
+      frame.appendChild(badge);
+
+      const open = make('a', 'embed-open', 'embed-chip', en ? 'Open in Jiangshan Atlas ↗' : this._zh('在江山时序中打开 ↗'));
+      open.target = '_blank';
+      open.rel = 'noopener';
+      const refreshHref = () => {
+        open.href = this._embedOpenUrl();
+      };
+      for (const t of ['pointerenter', 'focus', 'click']) open.addEventListener(t, refreshHref);
+      refreshHref();
+      frame.appendChild(open);
+
+      frame.appendChild(
+        make('div', 'embed-disclaimer', '', en ? 'Historical borders are approximate' : this._zh('历史疆域为示意性近似'))
+      );
+
+      this._syncEmbedBadge();
+
+      if (this.embed.autoplay && !this.embed.lock) {
+        const q = new URLSearchParams(location.search);
+        if (q.has('person') || q.has('journey')) {
+          // The trajectory opens asynchronously after the full snapshots load.
+          let tries = 0;
+          const timer = setInterval(() => {
+            if (this.activePerson) {
+              clearInterval(timer);
+              if (!this.personTimer) this.togglePersonAutoplay();
+            } else if (++tries > 60) {
+              clearInterval(timer);
+            }
+          }, 150);
+        } else {
+          setTimeout(() => {
+            if (!this.playing) this.startAutoplay();
+          }, 600);
+        }
+      }
     }
 
     applyLocale() {
@@ -1824,7 +1997,23 @@
       return true;
     }
 
-    _hydroMask(year) {
+    _hydroLabelPair(lb, year = this.year) {
+      if (!lb) return { zh: '', en: '' };
+      if (Array.isArray(lb.eraNames)) {
+        const y = year !== undefined ? year : this.year;
+        for (const en of lb.eraNames) {
+          if (
+            (en.from === undefined || y >= en.from) &&
+            (en.until === undefined || y < en.until)
+          ) {
+            return { zh: en.zh || lb.zh || '', en: en.en || lb.en || '' };
+          }
+        }
+      }
+      return { zh: lb.zh || '', en: lb.en || '' };
+    }
+
+    _hydroCourseMask(year) {
       if (!this.hydroData) return '';
       const y = year !== undefined ? year : this.year;
       const rMask = (this.hydroData.rivers || [])
@@ -1836,10 +2025,21 @@
         .map((l) => (this._isHydroVisible(l, y) ? '1' : '0'))
         .join('');
       const tMask = (this.hydroData.labels || [])
-        .filter((t) => t.appear !== undefined || t.vanish !== undefined)
+        .filter((t) => (t.appear !== undefined || t.vanish !== undefined) && !t.tier)
         .map((t) => (this._isHydroVisible(t, y) ? '1' : '0'))
         .join('');
       return `${rMask}:${lMask}:${tMask}`;
+    }
+
+    _hydroMask(year) {
+      if (!this.hydroData) return '';
+      const y = year !== undefined ? year : this.year;
+      const base = this._hydroCourseMask(y);
+      const eMask = (this.hydroData.labels || [])
+        .filter((t) => t.eraNames || (t.tier && (t.appear !== undefined || t.vanish !== undefined)))
+        .map((t) => (this._isHydroVisible(t, y) ? this._hydroLabelPair(t, y).zh : '0'))
+        .join('|');
+      return `${base}:${eMask}`;
     }
 
     _buildTerrainRivers() {
@@ -1896,10 +2096,11 @@
         );
       }
 
-      // 4. Render classical & bilingual water captions
+      // 4. Render classical & bilingual water and mountain-range captions
       for (const lb of this.hydroData.labels || []) {
         if (!lb.coord || !this._isHydroVisible(lb, this.year)) continue;
         const [lx, ly] = this.projector.toScreen(lb.coord[0], lb.coord[1]);
+        const tier = lb.tier || (lb.kind === 'range' || lb.kind === 'desert' ? 1 : 0);
         const kindCls =
           lb.kind === 'trunk'
             ? 'is-trunk'
@@ -1907,22 +2108,32 @@
               ? 'is-lake'
               : lb.kind === 'range'
                 ? 'is-range is-crowded-hidden'
-                : 'is-river';
+                : lb.kind === 'desert'
+                  ? 'is-range is-desert is-crowded-hidden'
+                  : tier > 0
+                    ? 'is-river is-detail-hydro is-crowded-hidden'
+                    : 'is-river';
         const rot = lb.rot || 0;
+        const { zh, en } = this._hydroLabelPair(lb, this.year);
+        const lxStr = lx.toFixed(1);
+        const lyStr = ly.toFixed(1);
         const tNode = this._svgNode(
           'text',
           {
             class: `hydro-label ${kindCls}`,
-            'data-x': lx.toFixed(1),
-            'data-y': ly.toFixed(1),
+            'data-x': lxStr,
+            'data-y': lyStr,
+            'data-base-x': lxStr,
+            'data-base-y': lyStr,
             'data-rot': String(rot),
-            'data-zh': lb.zh || '',
-            'data-en': lb.en || '',
-            transform: `translate(${lx.toFixed(1)},${ly.toFixed(1)}) rotate(${rot})`,
+            'data-tier': String(tier),
+            'data-zh': zh,
+            'data-en': en,
+            transform: `translate(${lxStr},${lyStr}) rotate(${rot})`,
           },
           this.grpRivers
         );
-        tNode.textContent = this.locale === 'en' ? lb.en || '' : this._zh(lb.zh || '');
+        tNode.textContent = this.locale === 'en' ? en : this._zh(zh);
       }
     }
 
@@ -1948,103 +2159,368 @@
       }
     }
 
+    _simplifyPolylineRdp(pts, eps) {
+      if (!pts || pts.length <= 2) return pts;
+      const n = pts.length;
+      const keep = new Uint8Array(n);
+      keep[0] = 1;
+      keep[n - 1] = 1;
+      const epsSq = eps * eps;
+      const stack = [0, n - 1];
+      while (stack.length) {
+        const e = stack.pop();
+        const s = stack.pop();
+        if (e - s <= 1) continue;
+        const ax = pts[s][0];
+        const ay = pts[s][1];
+        const bx = pts[e][0];
+        const by = pts[e][1];
+        const dx = bx - ax;
+        const dy = by - ay;
+        const lenSq = dx * dx + dy * dy;
+        let maxSq = -1;
+        let maxIdx = -1;
+        for (let i = s + 1; i < e; i++) {
+          const px = pts[i][0];
+          const py = pts[i][1];
+          let dSq;
+          if (lenSq > 1e-12) {
+            let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+            if (t < 0) t = 0;
+            else if (t > 1) t = 1;
+            const qx = ax + dx * t;
+            const qy = ay + dy * t;
+            dSq = (px - qx) * (px - qx) + (py - qy) * (py - qy);
+          } else {
+            dSq = (px - ax) * (px - ax) + (py - ay) * (py - ay);
+          }
+          if (dSq > maxSq) {
+            maxSq = dSq;
+            maxIdx = i;
+          }
+        }
+        if (maxSq > epsSq && maxIdx > s) {
+          keep[maxIdx] = 1;
+          stack.push(maxIdx, e, s, maxIdx);
+        }
+      }
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        if (keep[i]) out.push(pts[i]);
+      }
+      return out;
+    }
+
+    _weldBoundaryChains(chains) {
+      const valid = chains.filter((pts) => pts && pts.length >= 2);
+      const count = valid.length;
+      if (!count) return '';
+      const keyOf = (pt) => `${pt[0].toFixed(1)},${pt[1].toFixed(1)}`;
+      const startMap = new Map();
+      const endMap = new Map();
+      const addIdx = (map, k, idx) => {
+        let arr = map.get(k);
+        if (!arr) {
+          arr = [];
+          map.set(k, arr);
+        }
+        arr.push(idx);
+      };
+      for (let i = 0; i < count; i++) {
+        const pts = valid[i];
+        addIdx(startMap, keyOf(pts[0]), i);
+        addIdx(endMap, keyOf(pts[pts.length - 1]), i);
+      }
+      const used = new Uint8Array(count);
+      const takeMatch = (k) => {
+        const sArr = startMap.get(k);
+        if (sArr) {
+          while (sArr.length) {
+            const idx = sArr.pop();
+            if (!used[idx]) return { idx, rev: false };
+          }
+        }
+        const eArr = endMap.get(k);
+        if (eArr) {
+          while (eArr.length) {
+            const idx = eArr.pop();
+            if (!used[idx]) return { idx, rev: true };
+          }
+        }
+        return null;
+      };
+      let out = '';
+      for (let i = 0; i < count; i++) {
+        if (used[i]) continue;
+        used[i] = 1;
+        const headChunks = [];
+        let headKey = keyOf(valid[i][0]);
+        for (;;) {
+          const hit = takeMatch(headKey);
+          if (!hit) break;
+          used[hit.idx] = 1;
+          const pts = valid[hit.idx];
+          const aligned = hit.rev ? pts : pts.slice().reverse();
+          headChunks.push(aligned);
+          headKey = keyOf(aligned[0]);
+        }
+        const merged = [];
+        for (let h = headChunks.length - 1; h >= 0; h--) {
+          const c = headChunks[h];
+          for (let j = merged.length ? 1 : 0; j < c.length; j++) merged.push(c[j]);
+        }
+        const base = valid[i];
+        for (let j = merged.length ? 1 : 0; j < base.length; j++) merged.push(base[j]);
+        let tailKey = keyOf(merged[merged.length - 1]);
+        for (;;) {
+          const hit = takeMatch(tailKey);
+          if (!hit) break;
+          used[hit.idx] = 1;
+          const pts = valid[hit.idx];
+          if (hit.rev) {
+            for (let j = pts.length - 2; j >= 0; j--) merged.push(pts[j]);
+          } else {
+            for (let j = 1; j < pts.length; j++) merged.push(pts[j]);
+          }
+          tailKey = keyOf(merged[merged.length - 1]);
+        }
+        out += `M${merged[0][0].toFixed(1)} ${merged[0][1].toFixed(1)}`;
+        for (let j = 1; j < merged.length; j++) {
+          out += `L${merged[j][0].toFixed(1)} ${merged[j][1].toFixed(1)}`;
+        }
+      }
+      return out;
+    }
+
     _buildProvinceBoundaryPaths() {
       if (this._cachedProvinceBoundaryPaths) {
         return this._cachedProvinceBoundaryPaths;
       }
       const ptKey = (pt) => Math.round(pt[0] * 100) * 10000 + Math.round(pt[1] * 100);
-      const edgeKey = (p1, p2) => {
-        const k1 = ptKey(p1);
-        const k2 = ptKey(p2);
-        return k1 < k2 ? `${k1}|${k2}` : `${k2}|${k1}`;
-      };
-      const allRings = [];
+      const edgeKey = (k1, k2) => (k1 < k2 ? `${k1}|${k2}` : `${k2}|${k1}`);
+
+      const coordByKey = new Map();
       const edgeCounts = new Map();
+      const rawRings = [];
+
       for (const prov of this.provinces || []) {
         if (!prov || String(prov.code).includes('_JD') || !Array.isArray(prov.rings)) continue;
-        for (const poly of prov.rings) {
-          for (const ring of poly || []) {
-            if (!ring || ring.length < 2) continue;
-            allRings.push(ring);
-            for (let i = 0; i < ring.length - 1; i++) {
-              const ek = edgeKey(ring[i], ring[i + 1]);
+        for (let polyIdx = 0; polyIdx < prov.rings.length; polyIdx++) {
+          const poly = prov.rings[polyIdx];
+          if (!Array.isArray(poly)) continue;
+          for (let ringIdx = 0; ringIdx < poly.length; ringIdx++) {
+            const rawRing = poly[ringIdx];
+            if (!Array.isArray(rawRing) || rawRing.length < 3) continue;
+            const oriented = this.projector._orientRing(rawRing, ringIdx > 0);
+            const keys = [];
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            for (let i = 0; i < oriented.length; i++) {
+              const pt = oriented[i];
+              const k = ptKey(pt);
+              if (keys.length && keys[keys.length - 1] === k) continue;
+              keys.push(k);
+              let sc = coordByKey.get(k);
+              if (!sc) {
+                sc = this.projector.toScreen(pt[0], pt[1]);
+                coordByKey.set(k, sc);
+              }
+              if (sc[0] < minX) minX = sc[0];
+              if (sc[0] > maxX) maxX = sc[0];
+              if (sc[1] < minY) minY = sc[1];
+              if (sc[1] > maxY) maxY = sc[1];
+            }
+            while (keys.length > 1 && keys[keys.length - 1] === keys[0]) keys.pop();
+            if (keys.length < 3) continue;
+            for (let i = 0; i < keys.length; i++) {
+              const ek = edgeKey(keys[i], keys[(i + 1) % keys.length]);
               edgeCounts.set(ek, (edgeCounts.get(ek) || 0) + 1);
             }
+            rawRings.push({
+              prov,
+              polyIdx,
+              keys,
+              maxSpan: Math.max(maxX - minX, maxY - minY),
+            });
           }
         }
       }
 
-      const seenInterior = new Set();
-      const seenOuter = new Set();
-      let interior = '';
-      let outer = '';
-
-      for (const ring of allRings) {
-        let intPenX = NaN;
-        let intPenY = NaN;
-        let outPenX = NaN;
-        let outPenY = NaN;
-        for (let i = 0; i < ring.length - 1; i++) {
-          const p1 = ring[i];
-          const p2 = ring[i + 1];
-          const ek = edgeKey(p1, p2);
-          const count = edgeCounts.get(ek) || 0;
-          if (count >= 2) {
-            outPenX = NaN;
-            outPenY = NaN;
-            if (seenInterior.has(ek)) {
-              intPenX = NaN;
-              intPenY = NaN;
-              continue;
-            }
-            seenInterior.add(ek);
-            const [x1, y1] = this.projector.toScreen(p1[0], p1[1]);
-            const [x2, y2] = this.projector.toScreen(p2[0], p2[1]);
-            if (Math.hypot(x2 - x1, y2 - y1) < 0.05) continue;
-            if (x1 !== intPenX || y1 !== intPenY) {
-              interior += `M${x1.toFixed(1)} ${y1.toFixed(1)}`;
-            }
-            interior += `L${x2.toFixed(1)} ${y2.toFixed(1)}`;
-            intPenX = x2;
-            intPenY = y2;
-          } else {
-            intPenX = NaN;
-            intPenY = NaN;
-            if (seenOuter.has(ek)) {
-              outPenX = NaN;
-              outPenY = NaN;
-              continue;
-            }
-            seenOuter.add(ek);
-            const [x1, y1] = this.projector.toScreen(p1[0], p1[1]);
-            const [x2, y2] = this.projector.toScreen(p2[0], p2[1]);
-            if (Math.hypot(x2 - x1, y2 - y1) < 0.05) continue;
-            if (x1 !== outPenX || y1 !== outPenY) {
-              outer += `M${x1.toFixed(1)} ${y1.toFixed(1)}`;
-            }
-            outer += `L${x2.toFixed(1)} ${y2.toFixed(1)}`;
-            outPenX = x2;
-            outPenY = y2;
+      // Skip secondary sub-pixel offshore reef specks (<0.6 SVG px) while keeping every
+      // primary territory ring, significant island, and shared boundary intact.
+      const activeRings = rawRings.filter((rec) => {
+        if (rec.polyIdx === 0 || rec.maxSpan >= 0.6) return true;
+        const keys = rec.keys;
+        for (let i = 0; i < keys.length; i++) {
+          if ((edgeCounts.get(edgeKey(keys[i], keys[(i + 1) % keys.length])) || 0) >= 2) {
+            return true;
           }
         }
+        return false;
+      });
+
+      const neighborSets = new Map();
+      const addNeighbor = (a, b) => {
+        let s = neighborSets.get(a);
+        if (!s) {
+          s = new Set();
+          neighborSets.set(a, s);
+        }
+        s.add(b);
+      };
+      const pinnedKeys = new Set();
+      for (const rec of activeRings) {
+        const keys = rec.keys;
+        const m = keys.length;
+        pinnedKeys.add(keys[0]);
+        pinnedKeys.add(keys[Math.floor(m / 3)]);
+        pinnedKeys.add(keys[Math.floor((2 * m) / 3)]);
+        for (let i = 0; i < m; i++) {
+          const kp = keys[(i + m - 1) % m];
+          const kc = keys[i];
+          const kn = keys[(i + 1) % m];
+          addNeighbor(kc, kn);
+          addNeighbor(kn, kc);
+          const prevInt = (edgeCounts.get(edgeKey(kp, kc)) || 0) >= 2;
+          const nextInt = (edgeCounts.get(edgeKey(kc, kn)) || 0) >= 2;
+          if (prevInt !== nextInt) pinnedKeys.add(kc);
+        }
+      }
+      for (const [k, nbrs] of neighborSets) {
+        if (nbrs.size !== 2) pinnedKeys.add(k);
+      }
+
+      // Simplify each topological chain once so shared borders stay bit-identical across
+      // neighbor fills and deduplicated boundary tiles.
+      const RDP_EPS = 0.38;
+      const chainCache = new Map();
+      const getSimplifiedChain = (subKeys) => {
+        const len = subKeys.length;
+        let canonKey;
+        let reversed = false;
+        if (len === 2) {
+          const a = subKeys[0];
+          const b = subKeys[1];
+          reversed = a > b;
+          canonKey = reversed ? `${b}|${a}` : `${a}|${b}`;
+        } else {
+          const fwdTag = `${subKeys[0]}>${subKeys[1]}`;
+          const revTag = `${subKeys[len - 1]}>${subKeys[len - 2]}`;
+          reversed = fwdTag > revTag;
+          canonKey = reversed ? `${revTag}|${fwdTag}|${len}` : `${fwdTag}|${revTag}|${len}`;
+        }
+        let canonPts = chainCache.get(canonKey);
+        if (!canonPts) {
+          const rawPts = new Array(len);
+          if (reversed) {
+            for (let i = 0; i < len; i++) rawPts[i] = coordByKey.get(subKeys[len - 1 - i]);
+          } else {
+            for (let i = 0; i < len; i++) rawPts[i] = coordByKey.get(subKeys[i]);
+          }
+          canonPts = this._simplifyPolylineRdp(rawPts, RDP_EPS);
+          chainCache.set(canonKey, canonPts);
+        }
+        return { canonKey, canonPts, reversed };
+      };
+
+      const seenBoundaryChains = new Set();
+      const tileBuckets = Array.from({ length: 12 }, () => ({ interior: [], outer: [] }));
+      const provPaths = new Map();
+
+      for (const rec of activeRings) {
+        const keys = rec.keys;
+        const m = keys.length;
+        const pinIdx = [];
+        for (let i = 0; i < m; i++) {
+          if (pinnedKeys.has(keys[i])) pinIdx.push(i);
+        }
+        const ringPts = [];
+        for (let p = 0; p < pinIdx.length; p++) {
+          const start = pinIdx[p];
+          const end = pinIdx[(p + 1) % pinIdx.length];
+          const subKeys = [keys[start]];
+          let cursor = start;
+          do {
+            cursor = (cursor + 1) % m;
+            subKeys.push(keys[cursor]);
+          } while (cursor !== end);
+
+          const { canonKey, canonPts, reversed } = getSimplifiedChain(subKeys);
+          if (reversed) {
+            for (let j = canonPts.length - 1; j >= (ringPts.length ? 1 : 0); j--) {
+              ringPts.push(canonPts[j]);
+            }
+          } else {
+            for (let j = ringPts.length ? 1 : 0; j < canonPts.length; j++) {
+              ringPts.push(canonPts[j]);
+            }
+          }
+
+          if (!seenBoundaryChains.has(canonKey)) {
+            seenBoundaryChains.add(canonKey);
+            const midPt = canonPts[canonPts.length >> 1];
+            const tx = Math.max(0, Math.min(3, Math.floor(midPt[0] / 250)));
+            const ty = Math.max(0, Math.min(2, Math.floor(midPt[1] / 234)));
+            const bucket = tileBuckets[ty * 4 + tx];
+            const isInterior = (edgeCounts.get(edgeKey(subKeys[0], subKeys[1])) || 0) >= 2;
+            (isInterior ? bucket.interior : bucket.outer).push(canonPts);
+          }
+        }
+
+        if (ringPts.length >= 3) {
+          let ringD = `M${ringPts[0][0].toFixed(1)} ${ringPts[0][1].toFixed(1)}`;
+          const limit =
+            ringPts[ringPts.length - 1][0] === ringPts[0][0] &&
+            ringPts[ringPts.length - 1][1] === ringPts[0][1]
+              ? ringPts.length - 1
+              : ringPts.length;
+          if (limit >= 3) {
+            for (let i = 1; i < limit; i++) {
+              ringD += `L${ringPts[i][0].toFixed(1)} ${ringPts[i][1].toFixed(1)}`;
+            }
+            ringD += 'Z';
+            provPaths.set(rec.prov, (provPaths.get(rec.prov) || '') + ringD);
+          }
+        }
+      }
+
+      const tiles = [];
+      let interior = '';
+      let outer = '';
+      for (const b of tileBuckets) {
+        const tInt = this._weldBoundaryChains(b.interior);
+        const tOut = this._weldBoundaryChains(b.outer);
+        if (!tInt && !tOut) continue;
+        tiles.push({ interior: tInt, outer: tOut, combined: `${tInt}${tOut}` });
+        interior += tInt;
+        outer += tOut;
       }
 
       this._cachedProvinceBoundaryPaths = {
         interior,
         outer,
         combined: `${interior}${outer}`,
+        tiles,
+        provPaths,
       };
       return this._cachedProvinceBoundaryPaths;
     }
 
     _buildModernProvinces() {
+      const bounds = this._buildProvinceBoundaryPaths();
       const dashPaths = [];
       for (const prov of this.provinces) {
         const isDash = String(prov.code).includes('_JD');
+        const pathD = isDash
+          ? this.projector.multiRingsToSvgPath(prov.rings)
+          : (bounds.provPaths && bounds.provPaths.get(prov)) ||
+            this.projector.multiRingsToSvgPath(prov.rings);
         const path = this._svgNode(
           'path',
           {
-            d: this.projector.multiRingsToSvgPath(prov.rings),
+            d: pathD,
             class: isDash ? 'province-shape maritime-dash' : 'province-shape',
           },
           this.grpProvinces
@@ -2064,27 +2540,33 @@
           lbl.textContent = this.trTerm(rawShort);
         }
       }
-      const bounds = this._buildProvinceBoundaryPaths();
-      if (bounds.combined) {
-        this._svgNode(
-          'path',
-          { d: bounds.combined, class: 'province-boundary-casing' },
-          this.grpProvinces
-        );
+      const tiles = bounds.tiles && bounds.tiles.length ? bounds.tiles : [bounds];
+      for (const tile of tiles) {
+        if (tile.combined) {
+          this._svgNode(
+            'path',
+            { d: tile.combined, class: 'province-boundary-casing' },
+            this.grpProvinces
+          );
+        }
       }
-      if (bounds.interior) {
-        this._svgNode(
-          'path',
-          { d: bounds.interior, class: 'province-boundary-interior' },
-          this.grpProvinces
-        );
+      for (const tile of tiles) {
+        if (tile.interior) {
+          this._svgNode(
+            'path',
+            { d: tile.interior, class: 'province-boundary-interior' },
+            this.grpProvinces
+          );
+        }
       }
-      if (bounds.outer) {
-        this._svgNode(
-          'path',
-          { d: bounds.outer, class: 'province-boundary-outer' },
-          this.grpProvinces
-        );
+      for (const tile of tiles) {
+        if (tile.outer) {
+          this._svgNode(
+            'path',
+            { d: tile.outer, class: 'province-boundary-outer' },
+            this.grpProvinces
+          );
+        }
       }
       for (const dp of dashPaths) {
         if (this.grpProvinces && this.grpProvinces.appendChild) {
@@ -2553,14 +3035,47 @@
       const allCommanderyRegions = snap.regions.every(
         (r) => r && r.title && (r.title.endsWith('郡') || r.title.includes('内史'))
       );
-      const hasLargePolity = !allCommanderyRegions && polAreas.some((a) => a >= 65);
-      const findPolIdx = (x, y) => {
+      const hasLargePolity = !allCommanderyRegions && polAreas.some((a) => a >= 35);
+      const isMultiRegime = !allCommanderyRegions && polList.filter((p) => p && p.role !== 'neighbor').length >= 4;
+      // The boundary build queries many points against the same long rings.
+      // Index candidate edges by latitude; all geometric predicates below stay
+      // exact. The margin also covers nearPolityBorder's distance test.
+      const ringEdgeBins = new Map();
+      // The bins must cover the widest upstream distance query, including
+      // multi-regime midpoint (0.55) and endpoint (0.38) exclusions.
+      const borderMargin = isMultiRegime ? 0.55 : 0.16, binCount = 64;
+      const candidateEdges = (b, y) => {
+        if (b.ring.length < 128 || b.maxY <= b.minY) return null;
+        let index = ringEdgeBins.get(b);
+        if (!index) {
+          const bins = Array.from({ length: binCount }, () => []);
+          const scale = binCount / (b.maxY - b.minY);
+          for (let i = 0, j = b.ring.length - 1; i < b.ring.length; j = i++) {
+            const y1 = b.ring[i][1], y2 = b.ring[j][1];
+            // Extra neighboring bins make the filter conservative at floating
+            // point bucket boundaries. They never change the final predicates.
+            const lo = Math.max(0, Math.floor((Math.min(y1, y2) - borderMargin - b.minY) * scale) - 1);
+            const hi = Math.min(binCount - 1, Math.floor((Math.max(y1, y2) + borderMargin - b.minY) * scale) + 1);
+            for (let k = lo; k <= hi; k++) bins[k].push(i);
+          }
+          index = { bins, scale }; ringEdgeBins.set(b, index);
+        }
+        return index.bins[Math.max(0, Math.min(binCount - 1, Math.floor((y - b.minY) * index.scale)))];
+      };
+      const findPolIdx = (x, y, cache) => {
+        const key = cache ? `${x},${y}` : null;
+        if (cache) {
+          const hit = cache.get(key);
+          if (hit !== undefined) return hit;
+        }
         for (let rIdx = 0; rIdx < polRings.length; rIdx++) {
           const b = polRings[rIdx];
           if (x < b.minX || x > b.maxX || y < b.minY || y > b.maxY) continue;
           const ring = b.ring;
+          const edges = cache ? candidateEdges(b, y) : null;
           let inside = false;
-          for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+          for (let k = 0, count = edges ? edges.length : ring.length; k < count; k++) {
+            const i = edges ? edges[k] : k, j = i === 0 ? ring.length - 1 : i - 1;
             const xi = ring[i][0],
               yi = ring[i][1];
             const xj = ring[j][0],
@@ -2569,15 +3084,19 @@
               inside = !inside;
             }
           }
-          if (inside) return b.pIdx;
+          if (inside) {
+            if (cache) cache.set(key, b.pIdx);
+            return b.pIdx;
+          }
         }
+        if (cache) cache.set(key, -1);
         return -1;
       };
       const allowPolIdx = (pIdx) => {
         if (pIdx < 0) return false;
         const pol = polList[pIdx];
         if (!pol) return false;
-        if (hasLargePolity && pol.role === 'rival' && polAreas[pIdx] < 68) return false;
+        if (hasLargePolity && pol.role === 'rival' && polAreas[pIdx] < 35) return false;
         return true;
       };
       const nearPolityBorder = (x, y, margin) => {
@@ -2593,11 +3112,18 @@
             continue;
           }
           const ring = b.ring;
-          for (let i = 0; i < ring.length - 1; i++) {
+          const edges = candidateEdges(b, y);
+          for (let k = 0, count = edges ? edges.length : ring.length; k < count; k++) {
+            // Ray edge 0 closes the ring implicitly; the original distance
+            // test only considers explicitly consecutive coordinate pairs.
+            const end = edges ? edges[k] : k;
+            if (end === 0) continue;
+            const i = end - 1;
             const x1 = ring[i][0],
               y1 = ring[i][1];
             const x2 = ring[i + 1][0],
               y2 = ring[i + 1][1];
+            if (x < Math.min(x1, x2) - margin || x > Math.max(x1, x2) + margin) continue;
             const dx = x2 - x1,
               dy = y2 - y1;
             const len2 = dx * dx + dy * dy;
@@ -2624,47 +3150,66 @@
         return k1 < k2 ? `${k1}|${k2}` : `${k2}|${k1}`;
       };
 
-      const allRings = [];
-      const regEdgeCounts = new Map();
-      for (const reg of snap.regions) {
-        if (!reg || !reg.shape) continue;
-        const coords = reg.shape.coordinates;
-        const polys = reg.shape.type === 'Polygon' ? [coords] : coords || [];
-        for (const poly of polys) {
-          for (const ring of poly || []) {
-            if (!ring || ring.length < 2) continue;
-            allRings.push(ring);
-            for (let i = 0; i < ring.length - 1; i++) {
-              const ek = edgeKey(ring[i], ring[i + 1]);
-              regEdgeCounts.set(ek, (regEdgeCounts.get(ek) || 0) + 1);
+      // Adjacent phases frequently share the same administrative regions.
+      // Keep only the latest topology, so visiting history does not accumulate
+      // edge maps. Polity-dependent filtering still runs for every snapshot.
+      let topology = this._regionBoundaryTopology;
+      if (!topology || topology.regions !== snap.regions) {
+        const allRings = [];
+        const regEdgeCounts = new Map();
+        for (const reg of snap.regions) {
+          if (!reg || !reg.shape) continue;
+          const coords = reg.shape.coordinates;
+          const polys = reg.shape.type === 'Polygon' ? [coords] : coords || [];
+          for (const poly of polys) {
+            for (const ring of poly || []) {
+              if (!ring || ring.length < 2) continue;
+              allRings.push(ring);
+              for (let i = 0; i < ring.length - 1; i++) {
+                const ek = edgeKey(ring[i], ring[i + 1]);
+                regEdgeCounts.set(ek, (regEdgeCounts.get(ek) || 0) + 1);
+              }
             }
           }
         }
+        const rings = [];
+        for (const ring of allRings) {
+          const edges = [];
+          for (let i = 0; i < ring.length - 1; i++) {
+            const p1 = ring[i], p2 = ring[i + 1], key = edgeKey(p1, p2);
+            if ((regEdgeCounts.get(key) || 0) >= 2) edges.push({ p1, p2, key });
+            else if (edges.length && edges[edges.length - 1] !== null) edges.push(null);
+          }
+          if (edges.length) rings.push(edges);
+        }
+        topology = this._regionBoundaryTopology = { regions: snap.regions, rings };
       }
 
       const seenEdges = new Set();
+      const pointPolities = new Map();
       let d = '';
-      for (const ring of allRings) {
+      for (const edges of topology.rings) {
         let penX = NaN;
         let penY = NaN;
-        for (let i = 0; i < ring.length - 1; i++) {
-          const p1 = ring[i];
-          const p2 = ring[i + 1];
-          const ek = edgeKey(p1, p2);
-          if ((regEdgeCounts.get(ek) || 0) < 2 || seenEdges.has(ek)) {
+        for (const edge of edges) {
+          if (!edge || seenEdges.has(edge.key)) {
             penX = NaN;
             penY = NaN;
             continue;
           }
+          const { p1, p2, key: ek } = edge;
           const mx = (p1[0] + p2[0]) * 0.5;
           const my = (p1[1] + p2[1]) * 0.5;
-          const pIdxM = polRings.length ? findPolIdx(mx, my) : 0;
+          const pIdxM = polRings.length ? findPolIdx(mx, my, pointPolities) : 0;
           if (
             polRings.length &&
             (!allowPolIdx(pIdxM) ||
-              findPolIdx(p1[0], p1[1]) !== pIdxM ||
-              findPolIdx(p2[0], p2[1]) !== pIdxM ||
-              (hasLargePolity && nearPolityBorder(mx, my, 0.16)))
+              findPolIdx(p1[0], p1[1], pointPolities) !== pIdxM ||
+              findPolIdx(p2[0], p2[1], pointPolities) !== pIdxM ||
+              (hasLargePolity &&
+                (nearPolityBorder(mx, my, borderMargin) ||
+                  (isMultiRegime &&
+                    (nearPolityBorder(p1[0], p1[1], 0.38) || nearPolityBorder(p2[0], p2[1], 0.38))))))
           ) {
             penX = NaN;
             penY = NaN;
@@ -2683,6 +3228,9 @@
         }
       }
 
+      // The label-anchor predicate outlives this build; retain no point cache.
+      pointPolities.clear();
+      ringEdgeBins.clear();
       Object.defineProperty(snap, '_cachedRegionBoundaryPath', {
         value: d,
         writable: true,
@@ -2894,9 +3442,8 @@
           const [px, py] = this.projector.toScreen(p.coord[0], p.coord[1]);
           const hasNearMilestone = (dynasty.milestones || []).some(
             (m) =>
-              m.coord &&
               Math.abs(m.year - this.year) <= 8 &&
-              this.projector.greatCircleKm(p.coord, m.coord) <= 42
+              this._milestoneCoords(m).some((mc) => this.projector.greatCircleKm(p.coord, mc) <= 42)
           );
           const hasNearTrace =
             this.activeTrace && this.projector.greatCircleKm(p.coord, this.activeTrace) <= 32;
@@ -3034,21 +3581,31 @@
       this.grpMilestones.innerHTML = '';
       const group = this._svgNode('g', {}, this.grpMilestones);
       (dynasty.milestones || []).forEach((m, idx) => {
-        if (!m.coord) return;
-        const [x, y] = this.projector.toScreen(m.coord[0], m.coord[1]);
-        const pin = this._svgNode(
-          'g',
-          {
-            class: 'milestone-pin',
-            'data-x': x.toFixed(1),
-            'data-y': y.toFixed(1),
-            'data-year': m.year,
-            'data-idx': idx,
-          },
-          group
-        );
-        this._svgNode('circle', { class: 'ev-ring', r: 9 }, pin);
-        this._svgNode('polygon', { class: 'ev-core', points: '0,-5.5 5.5,0 0,5.5 -5.5,0' }, pin);
+        const anchors = this._getMilestoneAnchors(dynasty, m);
+        if (!anchors.length) return;
+        const primarySiteIdx = this._defaultAnchorIndex(m, anchors, true);
+        anchors.forEach((anc, siteIdx) => {
+          if (!anc.coord) return;
+          const [x, y] = this.projector.toScreen(anc.coord[0], anc.coord[1]);
+          const isPrimary = siteIdx === primarySiteIdx;
+          const pin = this._svgNode(
+            'g',
+            {
+              class: isPrimary ? 'milestone-pin' : 'milestone-pin is-secondary-pin',
+              'data-x': x.toFixed(1),
+              'data-y': y.toFixed(1),
+              'data-lng': anc.coord[0].toFixed(3),
+              'data-lat': anc.coord[1].toFixed(3),
+              'data-year': m.year,
+              'data-idx': idx,
+              'data-site-idx': siteIdx,
+            },
+            group
+          );
+          this._svgNode('circle', { class: 'ev-hit', r: 7 }, pin);
+          this._svgNode('circle', { class: 'ev-ring', r: 7 }, pin);
+          this._svgNode('polygon', { class: 'ev-core', points: '0,-3.9 3.9,0 0,3.9 -3.9,0' }, pin);
+        });
       });
       this._updateMilestoneStates(dynasty);
       this._rescaleSvgTypography();
@@ -3084,22 +3641,308 @@
       return exactIdx >= 0 ? exactIdx : activeIdx;
     }
 
+    _splitOutsideParens(str, sepRegex) {
+      if (!str) return [];
+      const parts = [];
+      let depth = 0;
+      let cur = '';
+      for (let i = 0; i < str.length; i++) {
+        const ch = str[i];
+        if (ch === '（' || ch === '(') {
+          depth++;
+          cur += ch;
+          continue;
+        }
+        if (ch === '）' || ch === ')') {
+          depth = Math.max(0, depth - 1);
+          cur += ch;
+          continue;
+        }
+        if (depth === 0) {
+          const rest = str.slice(i);
+          const match = rest.match(sepRegex);
+          if (match && match.index === 0) {
+            if (cur.trim()) parts.push(cur.trim());
+            cur = '';
+            i += match[0].length - 1;
+            continue;
+          }
+        }
+        cur += ch;
+      }
+      if (cur.trim()) parts.push(cur.trim());
+      return parts;
+    }
+
+    _milestoneCoords(m) {
+      if (!m) return [];
+      if (Array.isArray(m.siteCoords) && m.siteCoords.length) return m.siteCoords;
+      return m.coord ? [m.coord] : [];
+    }
+
+    _getMilestoneAnchors(dynasty, m) {
+      if (!m) return [];
+      const cleanShort = (s) =>
+        String(s || '')
+          .replace(/\s*（[^）]*）|\s*\([^)]*\)/g, '')
+          .trim() || String(s || '').trim();
+      const zhParts = m.site ? this._splitOutsideParens(m.site, /\s*·\s*/) : [];
+      if (
+        Array.isArray(m.siteCoords) &&
+        m.siteCoords.length >= 2 &&
+        m.siteCoords.length === zhParts.length
+      ) {
+        const isModDyn = Boolean(dynasty && (dynasty.key === 'roc' || dynasty.key === 'prc'));
+        let locParts;
+        if (this.locale === 'en') {
+          const enRaw = this._enMilestoneSite(dynasty, m);
+          const enSplit = this._splitOutsideParens(enRaw, /\s*(?:·|&|\/|,)\s*/);
+          locParts =
+            enSplit.length === zhParts.length
+              ? enSplit
+              : zhParts.map((p) => (isModDyn ? this.trModernCity(p) : this.trTerm(p)));
+        } else {
+          locParts = zhParts.map((p) => (isModDyn ? this.trModernCity(p) : this.trTerm(p)));
+        }
+        const merged = [];
+        for (let i = 0; i < m.siteCoords.length; i++) {
+          const coord = m.siteCoords[i];
+          const fullLabel = locParts[i] || '';
+          const shortLabel = cleanShort(fullLabel);
+          const nearIdx =
+            this.projector && typeof this.projector.greatCircleKm === 'function'
+              ? merged.findIndex((a) => this.projector.greatCircleKm(a.coord, coord) <= 32)
+              : -1;
+          if (nearIdx >= 0) {
+            if (shortLabel && !merged[nearIdx].shortLabel.includes(shortLabel)) {
+              merged[nearIdx].shortLabel += ` · ${shortLabel}`;
+              merged[nearIdx].fullLabel += ` · ${fullLabel}`;
+            }
+          } else {
+            merged.push({ shortLabel, fullLabel, coord });
+          }
+        }
+        return merged;
+      }
+      if (!m.coord) return [];
+      const rawSiteStr = m.site ? this.milestoneSite(dynasty, m) : '';
+      const shortLabel = cleanShort(rawSiteStr).replace(/\s*·\s*/g, ' · ');
+      return [{ shortLabel, fullLabel: rawSiteStr, coord: m.coord }];
+    }
+
+    _defaultAnchorIndex(m, anchors, ignoreActiveTrace = false) {
+      if (!anchors || anchors.length <= 1) return 0;
+      const canDist = Boolean(this.projector && typeof this.projector.greatCircleKm === 'function');
+      if (!ignoreActiveTrace && Array.isArray(this.activeTrace) && canDist) {
+        const tIdx = anchors.findIndex(
+          (a) => a.coord && this.projector.greatCircleKm(this.activeTrace, a.coord) <= 30
+        );
+        if (tIdx >= 0) return tIdx;
+      }
+      if (m && m.coord && canDist) {
+        let bestIdx = 0;
+        let bestKm = Infinity;
+        anchors.forEach((a, i) => {
+          if (!a.coord) return;
+          const km = this.projector.greatCircleKm(m.coord, a.coord);
+          if (km < bestKm) {
+            bestKm = km;
+            bestIdx = i;
+          }
+        });
+        if (bestKm <= 60) return bestIdx;
+      }
+      return 0;
+    }
+
+    _milestoneSpanBounds(anchors, defCam) {
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
+      let maxKm = 0;
+      const canDist = Boolean(this.projector && typeof this.projector.greatCircleKm === 'function');
+      for (let i = 0; i < anchors.length; i++) {
+        const a = anchors[i];
+        const [sx, sy] = this.projector.toScreen(a.coord[0], a.coord[1]);
+        if (sx < minX) minX = sx;
+        if (sx > maxX) maxX = sx;
+        if (sy < minY) minY = sy;
+        if (sy > maxY) maxY = sy;
+        if (canDist) {
+          for (let j = i + 1; j < anchors.length; j++) {
+            const km = this.projector.greatCircleKm(a.coord, anchors[j].coord);
+            if (km > maxKm) maxKm = km;
+          }
+        }
+      }
+      const ar = defCam.h / defCam.w;
+      const isMobile = typeof window !== 'undefined' && window.innerWidth <= 900;
+      const padX = isMobile ? 74 : 112;
+      const padY = isMobile ? 76 : 96;
+      const reqW = Math.max(maxX - minX + padX * 2, (maxY - minY + padY * 2) / ar);
+      const isContinental = maxKm > 1350 || reqW > defCam.w * 1.04;
+      return { minX, maxX, minY, maxY, ar, isMobile, reqW, maxKm, isContinental };
+    }
+
+    _frameMilestoneAnchors(dynasty, m, opts = {}) {
+      const isMapChange = Boolean(opts && opts.isMapChange);
+      const anchors = this._getMilestoneAnchors(dynasty, m).filter((a) => a.coord);
+      if (!anchors.length || !this.projector || typeof this._animateCameraTo !== 'function') {
+        if (isMapChange && this.camera.w < this._getDefaultCamera().w * 0.85) {
+          this.resetCamera();
+        }
+        return false;
+      }
+      const defCam = this._getDefaultCamera();
+      const frameSingleCoord = (coord) => {
+        if (!coord) return false;
+        if (isMapChange) {
+          const [sx, sy] = this.projector.toScreen(coord[0], coord[1]);
+          const outX = sx < defCam.x + defCam.w * 0.14 || sx > defCam.x + defCam.w * 0.86;
+          const outY = sy < defCam.y + defCam.h * 0.16 || sy > defCam.y + defCam.h * 0.84;
+          if (outX || outY) {
+            this._animateCameraTo({
+              x: Math.max(-180, Math.min(1000 - defCam.w + 140, sx - defCam.w * 0.5)),
+              y: Math.max(-150, Math.min(700 - defCam.h + 120, sy - defCam.h * 0.42)),
+              w: defCam.w,
+              h: defCam.h,
+            });
+            return true;
+          }
+          if (this.camera.w < defCam.w * 0.85) {
+            this.resetCamera();
+            return true;
+          }
+          return false;
+        }
+        this._panToward(coord[0], coord[1]);
+        return true;
+      };
+      if (anchors.length === 1) return frameSingleCoord(anchors[0].coord);
+      const { minX, maxX, minY, maxY, ar, isMobile, reqW, isContinental } =
+        this._milestoneSpanBounds(anchors, defCam);
+      if (isContinental) {
+        const primaryCoord =
+          (this.activeMilestone &&
+            this.activeMilestone.milestone === m &&
+            this.activeMilestone.anchorCoord) ||
+          (anchors[this._defaultAnchorIndex(m, anchors)] || anchors[0]).coord;
+        return frameSingleCoord(primaryCoord);
+      }
+      const minW = isMapChange ? defCam.w : Math.min(defCam.w, isMobile ? 310 : 410);
+      const w = Math.max(minW, Math.min(defCam.w * 1.04, reqW));
+      const h = w * ar;
+      const cx = (minX + maxX) * 0.5;
+      const cy = (minY + maxY) * 0.5;
+      if (
+        isMapChange &&
+        w <= defCam.w * 1.02 &&
+        minX >= defCam.x + defCam.w * 0.12 &&
+        maxX <= defCam.x + defCam.w * 0.88 &&
+        minY >= defCam.y + defCam.h * 0.14 &&
+        maxY <= defCam.y + defCam.h * 0.86
+      ) {
+        if (this.camera.w < defCam.w * 0.85) {
+          this.resetCamera();
+          return true;
+        }
+        return false;
+      }
+      this._animateCameraTo({
+        x: Math.max(-180, Math.min(1000 - w + 140, cx - w * 0.5)),
+        y: Math.max(-150, Math.min(700 - h + 120, cy - h * 0.45)),
+        w,
+        h,
+      });
+      return true;
+    }
+
+    _ensureMilestoneInView(dynasty, m) {
+      if (!m || !this.projector || typeof this._animateCameraTo !== 'function') return false;
+      const anchors = this._getMilestoneAnchors(dynasty, m).filter((a) => a.coord);
+      if (anchors.length <= 1) {
+        return this._ensureCoordInView(anchors[0] ? anchors[0].coord : m.coord);
+      }
+      const defCam = this._getDefaultCamera();
+      const { isContinental } = this._milestoneSpanBounds(anchors, defCam);
+      if (isContinental) {
+        const primaryCoord =
+          (this.activeMilestone &&
+            this.activeMilestone.milestone === m &&
+            this.activeMilestone.anchorCoord) ||
+          (anchors[this._defaultAnchorIndex(m, anchors)] || anchors[0]).coord;
+        return this._ensureCoordInView(primaryCoord);
+      }
+      const cam = this._cameraTarget || this.camera;
+      const anyOut = anchors.some((a) => {
+        const [sx, sy] = this.projector.toScreen(a.coord[0], a.coord[1]);
+        return (
+          sx < cam.x + cam.w * 0.12 ||
+          sx > cam.x + cam.w * 0.88 ||
+          sy < cam.y + cam.h * 0.14 ||
+          sy > cam.y + cam.h * 0.86
+        );
+      });
+      if (!anyOut) return false;
+      return this._frameMilestoneAnchors(dynasty, m, { isMapChange: true });
+    }
+
     _updateMilestoneStates(dynasty) {
       const activeIdx = this._activeMilestoneIndex(dynasty);
-      let currentPin = null;
+      const currentPins = [];
+      const canDist = Boolean(this.projector && typeof this.projector.greatCircleKm === 'function');
+      const settlementsHidden = Boolean(
+        this.grpSettlements &&
+          this.grpSettlements.classList &&
+          this.grpSettlements.classList.contains('is-hidden')
+      );
+      const visibleCities =
+        canDist && !settlementsHidden && dynasty && Array.isArray(dynasty.settlements)
+          ? dynasty.settlements.filter(
+              (s) =>
+                Array.isArray(s.coord) &&
+                (s.appear === undefined || this.year >= s.appear) &&
+                (s.vanish === undefined || this.year < s.vanish) &&
+                (s.tier !== 2 ||
+                  (typeof this._isSettlementCapital === 'function'
+                    ? this._isSettlementCapital(s, this.year)
+                    : Boolean(s.isCapital)))
+            )
+          : [];
+      const seenPastCoords = [];
       this.grpMilestones.querySelectorAll('.milestone-pin').forEach((pin) => {
         const idx = Number(pin.dataset.idx);
         const m = (dynasty.milestones || [])[idx];
         const effY = m ? this._clampYearToDynasty(dynasty, m.year) : Number(pin.dataset.year);
         const nextFuture = effY > this.year && idx !== activeIdx;
         const isCurrent = idx === activeIdx;
+        const isPast = effY <= this.year && !isCurrent;
+        let isPastOccluded = false;
+        if (isPast && canDist && !pin.classList.contains('is-secondary-pin')) {
+          const pinCoord =
+            pin.dataset.lng !== undefined && pin.dataset.lat !== undefined
+              ? [Number(pin.dataset.lng), Number(pin.dataset.lat)]
+              : m && m.coord;
+          if (pinCoord) {
+            const onCity = visibleCities.some(
+              (s) => this.projector.greatCircleKm(pinCoord, s.coord) <= 8
+            );
+            const dupPast =
+              !onCity &&
+              seenPastCoords.some((c) => this.projector.greatCircleKm(pinCoord, c) <= 6);
+            isPastOccluded = onCity || dupPast;
+            if (!isPastOccluded) seenPastCoords.push(pinCoord);
+          }
+        }
         pin.classList.toggle('is-future', nextFuture);
-        pin.classList.toggle('is-past', effY <= this.year && !isCurrent);
+        pin.classList.toggle('is-past', isPast);
+        pin.classList.toggle('is-past-occluded', isPastOccluded);
         pin.classList.toggle('is-current', isCurrent);
-        if (isCurrent) currentPin = pin;
+        if (isCurrent) currentPins.push(pin);
       });
-      if (currentPin && currentPin.parentNode) {
-        currentPin.parentNode.appendChild(currentPin);
+      for (const pin of currentPins) {
+        if (pin && pin.parentNode) pin.parentNode.appendChild(pin);
       }
     }
 
@@ -3132,7 +3975,10 @@
         !this.milestoneBalloon.classList.contains('is-hidden')
       ) {
         if (this.activeMilestone.locale !== renderedLocale) {
-          this.openMilestoneBalloon(dynasty, this.activeMilestone.milestone, { isAuto: false });
+          this.openMilestoneBalloon(dynasty, this.activeMilestone.milestone, {
+            isAuto: false,
+            siteIdx: this.activeMilestone.siteIdx,
+          });
         } else {
           this._positionMilestoneBalloon();
         }
@@ -3159,14 +4005,16 @@
         !this.milestoneBalloon.classList.contains('is-hidden')
       ) {
         this.grpMilestones.querySelectorAll('.milestone-pin').forEach((n) => {
-          n.classList.toggle('is-active', Number(n.dataset.idx) === am.idx);
+          const sameM = Number(n.dataset.idx) === am.idx;
+          n.classList.toggle('is-active', sameM);
+          n.classList.toggle('is-anchor-pin', sameM && Number(n.dataset.siteIdx) === am.siteIdx);
         });
         this._positionMilestoneBalloon();
         return;
       }
       this.openMilestoneBalloon(dynasty, m, { isAuto: true });
       if (this.playing && !this.dragState && !this.pinchState) {
-        if (this._ensureCoordInView(m.coord)) {
+        if (this._ensureMilestoneInView(dynasty, m)) {
           this.playHoldTicks = Math.max(this.playHoldTicks, 3);
         }
       }
@@ -3180,8 +4028,18 @@
         list.find((item) => item.year === Number(milestoneEl.dataset.year)) ||
         null;
       if (!m0 || !m0.coord) return m0;
+      if (
+        milestoneEl.classList &&
+        (milestoneEl.classList.contains('is-current') || milestoneEl.classList.contains('is-active'))
+      ) {
+        return m0;
+      }
+      const pinCoord =
+        milestoneEl.dataset.lng !== undefined && milestoneEl.dataset.lat !== undefined
+          ? [Number(milestoneEl.dataset.lng), Number(milestoneEl.dataset.lat)]
+          : m0.coord;
       const colocated = list.filter(
-        (item) => item.coord && this.projector.greatCircleKm(m0.coord, item.coord) <= 18
+        (item) => item.coord && this.projector.greatCircleKm(pinCoord, item.coord) <= 18
       );
       if (colocated.length <= 1) return m0;
       if (
@@ -3220,6 +4078,43 @@
       return idx !== undefined ? idx : null;
     }
 
+    _measureMilestoneBalloonSize(estW = 0, estH = 0) {
+      if (this.milestoneBalloon && this.milestoneBalloon.style) {
+        const prevLeft = this.milestoneBalloon.style.left;
+        const prevTop = this.milestoneBalloon.style.top;
+        this.milestoneBalloon.style.left = '0px';
+        this.milestoneBalloon.style.top = '0px';
+        const realW = this.milestoneBalloon.offsetWidth;
+        const realH = this.milestoneBalloon.offsetHeight;
+        this.milestoneBalloon.style.left = prevLeft;
+        this.milestoneBalloon.style.top = prevTop;
+        if (realW > 0 && realH > 0) {
+          this._milestoneBalloonSize = { w: realW, h: realH };
+          return;
+        }
+      }
+      this._milestoneBalloonSize = {
+        w: estW || (this._milestoneBalloonSize && this._milestoneBalloonSize.w) || 260,
+        h: estH || (this._milestoneBalloonSize && this._milestoneBalloonSize.h) || 62,
+      };
+    }
+
+    _selectMilestoneAnchor(siteIdx, anchorsOpt = null) {
+      const am = this.activeMilestone;
+      if (!am || !this.milestoneBalloon) return;
+      const amDyn = this.dynasties.find((d) => d.key === am.dynastyKey);
+      const anchors = anchorsOpt || am.anchors || this._getMilestoneAnchors(amDyn, am.milestone);
+      const anc = anchors[siteIdx];
+      if (!anc || !anc.coord) return;
+      am.siteIdx = siteIdx;
+      am.anchorCoord = anc.coord;
+      am.anchors = anchors;
+      this.grpMilestones.querySelectorAll('.milestone-pin').forEach((n) => {
+        const sameM = Number(n.dataset.idx) === am.idx;
+        n.classList.toggle('is-anchor-pin', sameM && Number(n.dataset.siteIdx) === siteIdx);
+      });
+    }
+
     openMilestoneBalloon(dynasty, m, opts = {}) {
       const isAuto = Boolean(opts && opts.isAuto);
       if (!isAuto && this.hoverTip) {
@@ -3238,22 +4133,33 @@
       if (!isAuto && this.dismissedCalloutIds && mIdx >= 0) {
         this.dismissedCalloutIds.delete(`${dynasty.key}:${mIdx}`);
       }
+      const anchors = this._getMilestoneAnchors(dynasty, m);
+      const siteIdx =
+        opts && Number.isInteger(opts.siteIdx) && anchors[opts.siteIdx]
+          ? opts.siteIdx
+          : this._defaultAnchorIndex(m, anchors);
+      const anchorCoord = (anchors[siteIdx] && anchors[siteIdx].coord) || m.coord;
       this.activeMilestone = {
         dynastyKey: dynasty.key,
         milestone: m,
         idx: mIdx,
+        siteIdx,
+        anchorCoord,
+        anchors,
         year: this.year,
         isAuto,
         locale: this._effectiveRenderedLocale(),
       };
       this.grpMilestones.querySelectorAll('.milestone-pin').forEach((n) => {
-        n.classList.toggle('is-active', Number(n.dataset.idx) === mIdx);
+        const sameM = Number(n.dataset.idx) === mIdx;
+        n.classList.toggle('is-active', sameM);
+        n.classList.toggle('is-anchor-pin', sameM && Number(n.dataset.siteIdx) === siteIdx);
       });
       if (!isAuto) {
         this._highlightCurrentMilestone(dynasty);
         this._updateMilestoneStates(dynasty);
       }
-      if (!m.coord || (opts && opts.fromStep && this.grpMilestones && this.grpMilestones.classList.contains('is-hidden'))) {
+      if (!anchorCoord || (opts && opts.fromStep && this.grpMilestones && this.grpMilestones.classList.contains('is-hidden'))) {
         this.milestoneBalloon.classList.add('is-hidden');
         const vf = this._id('viewport-frame');
         if (vf) vf.classList.remove('has-open-milestone-balloon');
@@ -3262,18 +4168,25 @@
       const yrText = this.formatYear(m.year);
       const eraLabel = this._eventEraLabel(dynasty, m);
       const headlineText = this.milestoneHeadline(dynasty, m);
-      const rawSiteStr = this.milestoneSite(dynasty, m);
-      const siteStr =
-        rawSiteStr
-          .replace(/\s*（[^）]*）|\s*\([^)]*\)/g, '')
-          .replace(/\s*·\s*/g, ' · ')
-          .trim() || rawSiteStr;
       const traceTitle =
         this.locale === 'en' ? 'Click to trace place history' : '点击查看此地历代沿革（点地溯源）';
-      const traceSuffix = this.locale === 'en' ? 'History ›' : '沿革 ›';
-      const placeHtml = siteStr
-        ? `<button type="button" class="ep-place" title="${traceTitle}">${SVG_ICONS.pin} ${siteStr} · ${traceSuffix}</button>`
+      const isMultiAnchor = anchors.length >= 2;
+      const pillsInner = anchors
+        .map((anc, k) => {
+          if (!anc || !anc.shortLabel) return '';
+          const tip = `${anc.fullLabel || anc.shortLabel} · ${traceTitle}`;
+          return `<button type="button" class="ep-place" data-site-idx="${k}" title="${escHtml(tip)}">${SVG_ICONS.pin} ${anc.shortLabel} ›</button>`;
+        })
+        .join('');
+      const placeHtml = pillsInner
+        ? isMultiAnchor
+          ? `<span class="ep-places">${pillsInner}</span>`
+          : pillsInner
         : '';
+      const placeEstText = anchors
+        .map((a) => (a && a.shortLabel ? `${a.shortLabel} ›` : ''))
+        .filter(Boolean)
+        .join('  ');
       const relicStopIdx = this._findRelicStopForMilestone(dynasty, m);
       const relicTitle =
         this.locale === 'en'
@@ -3289,29 +4202,46 @@
         `<div class="ep-head"><span class="ep-year">${yrText} · ${eraLabel}</span>${placeHtml}${relicHtml}<button type="button" class="ep-close" title="${closeTitle}" aria-label="${closeTitle}">×</button></div>` +
         `<div class="ep-text">${headlineText}</div>`;
       const isMobile = typeof window !== 'undefined' && window.innerWidth <= 900;
-      const maxW = isMobile ? Math.min(286, (window.innerWidth || 390) - 16) : 348;
+      const maxW = isMobile ? Math.min(268, (window.innerWidth || 390) - 20) : 348;
       const headW =
         this._estimateLocalTextWidth(
-          `${yrText} · ${eraLabel}${siteStr ? ` ${siteStr} · ${traceSuffix}` : ''}${relicStopIdx !== null ? ` 玺 ${relicLabel}` : ''}`,
+          `${yrText} · ${eraLabel}${placeEstText ? ` ${placeEstText}` : ''}${relicStopIdx !== null ? ` 玺 ${relicLabel}` : ''}`,
           11.5,
           0
-        ) + 52;
-      const textW = this._estimateLocalTextWidth(headlineText, 12.2, 0);
+        ) + (isMultiAnchor ? 40 + anchors.length * 22 : 52);
+      const textW = this._estimateLocalTextWidth(headlineText, isMobile ? 11.5 : 12.2, 0);
       const estW = Math.round(
         Math.max(isMobile ? 190 : 220, Math.min(maxW, Math.max(headW, textW + 24)))
       );
-      const textLines = Math.max(1, Math.ceil(textW / Math.max(120, estW - 24)));
-      const estH = Math.round(36 + textLines * 17.5);
+      const headLines = Math.max(1, Math.ceil(headW / Math.max(120, estW - 28)));
+      const textLines = Math.max(1, Math.ceil(textW / Math.max(120, estW - 22)));
+      const estH = Math.round(16 + headLines * (isMobile ? 22 : 20) + textLines * 17.5);
       this._milestoneBalloonSize = { w: estW, h: estH };
-      const placeBtn = this.milestoneBalloon.querySelector('.ep-place');
-      if (placeBtn && m.coord) {
-        placeBtn.addEventListener('click', (e) => {
+      const placeBtns =
+        typeof this.milestoneBalloon.querySelectorAll === 'function'
+          ? Array.from(this.milestoneBalloon.querySelectorAll('.ep-place'))
+          : [this.milestoneBalloon.querySelector('.ep-place')].filter(Boolean);
+      placeBtns.forEach((btn) => {
+        btn.addEventListener('click', (e) => {
           e.stopPropagation();
-          const coCity = this._findCoLocatedSettlement(dynasty, m.coord[0], m.coord[1], 28);
-          const targetCoord = coCity ? coCity.coord : m.coord;
-          this.openGenealogyAt(targetCoord[0], targetCoord[1]);
+          const k = Number(btn.dataset.siteIdx || 0);
+          const anc = anchors[k] || anchors[0];
+          const baseCoord = (anc && anc.coord) || m.coord;
+          if (!baseCoord) return;
+          const coCity = this._findCoLocatedSettlement(dynasty, baseCoord[0], baseCoord[1], 28);
+          const targetCoord = coCity ? coCity.coord : baseCoord;
+          if (this.activeMilestone && this.activeMilestone.milestone === m) {
+            this.activeMilestone.isAuto = false;
+            this._selectMilestoneAnchor(k, anchors);
+          }
+          this.openGenealogyAt(
+            targetCoord[0],
+            targetCoord[1],
+            coCity ? null : anc && anc.shortLabel ? anc.shortLabel : null
+          );
+          this._panToward(targetCoord[0], targetCoord[1]);
         });
-      }
+      });
       const relicBtn = this.milestoneBalloon.querySelector('.ep-relic-seal');
       if (relicBtn && relicStopIdx !== null) {
         relicBtn.addEventListener('click', (e) => {
@@ -3331,17 +4261,17 @@
       }
       this.milestoneBalloon.classList.remove('is-hidden', 'is-offscreen');
       if (this.locale === 'zh-tw') this._applyZhHantDom(this.milestoneBalloon);
+      this._measureMilestoneBalloonSize(estW, estH);
       const vf = this._id('viewport-frame');
       if (vf) vf.classList.add('has-open-milestone-balloon');
       this._positionMilestoneBalloon();
     }
 
     _positionMilestoneBalloon(viewportRect = null) {
-      if (!this.activeMilestone || !this.activeMilestone.milestone.coord) return;
-      const [sx, sy] = this.projector.toScreen(
-        this.activeMilestone.milestone.coord[0],
-        this.activeMilestone.milestone.coord[1]
-      );
+      const am = this.activeMilestone;
+      const anchorCoord = am && (am.anchorCoord || am.milestone.coord);
+      if (!anchorCoord) return;
+      const [sx, sy] = this.projector.toScreen(anchorCoord[0], anchorCoord[1]);
       const rect =
         viewportRect ||
         (this.dragState && this.dragState.rect) ||
@@ -3379,27 +4309,70 @@
       );
       const minTop = isMobile ? 48 : 12;
       const maxTop = Math.max(minTop, rect.height - bH - (isMobile ? 56 : 16));
+      const safeBelowMaxTop = isMobile ? Math.max(minTop, rect.height - bH - 116) : maxTop;
       const pinGap = isMobile ? 10 : 12;
 
-      let left;
-      let top = Math.max(minTop, Math.min(maxTop, py - bH * 0.42));
-      let caretDir = 'left';
+      const sideTop = Math.max(minTop, Math.min(maxTop, py - bH * 0.42));
+      const midLeft = Math.max(minLeft, Math.min(rightLimit, px - bW * 0.5));
+      const candidates = [];
       if (px + pinGap <= rightLimit) {
-        left = px + pinGap;
-        caretDir = 'left';
-      } else if (px - bW - pinGap >= minLeft) {
-        left = px - bW - pinGap;
-        caretDir = 'right';
-      } else {
-        left = Math.max(minLeft, Math.min(rightLimit, px - bW * 0.5));
-        if (py - bH - pinGap >= minTop) {
-          top = py - bH - pinGap;
-          caretDir = 'bottom';
-        } else {
-          top = Math.min(maxTop, py + pinGap + 4);
-          caretDir = 'top';
+        candidates.push({ left: px + pinGap, top: sideTop, caretDir: 'left' });
+      }
+      if (px - bW - pinGap >= minLeft) {
+        candidates.push({ left: px - bW - pinGap, top: sideTop, caretDir: 'right' });
+      }
+      if (py - bH - pinGap >= minTop) {
+        candidates.push({ left: midLeft, top: py - bH - pinGap, caretDir: 'bottom' });
+      }
+      if (py + pinGap + 4 <= safeBelowMaxTop) {
+        candidates.push({ left: midLeft, top: py + pinGap + 4, caretDir: 'top' });
+      }
+      if (!candidates.length) {
+        candidates.push({
+          left: midLeft,
+          top: Math.min(maxTop, py + pinGap + 4),
+          caretDir: 'top',
+        });
+      }
+
+      let chosen = candidates[0];
+      if (candidates.length > 1 && am && Array.isArray(am.anchors) && am.anchors.length >= 2) {
+        const siblingPts = [];
+        for (let i = 0; i < am.anchors.length; i++) {
+          if (i === am.siteIdx || !am.anchors[i].coord) continue;
+          const [asx, asy] = this.projector.toScreen(
+            am.anchors[i].coord[0],
+            am.anchors[i].coord[1]
+          );
+          const spx = padX + (asx - this.camera.x) * scale;
+          const spy = padY + (asy - this.camera.y) * scale;
+          if (spx >= 0 && spx <= rect.width && spy >= 0 && spy <= rect.height) {
+            siblingPts.push([spx, spy]);
+          }
+        }
+        if (siblingPts.length) {
+          let bestHits = Infinity;
+          for (const c of candidates) {
+            let hits = 0;
+            for (const [spx, spy] of siblingPts) {
+              if (
+                spx >= c.left - 8 &&
+                spx <= c.left + bW + 8 &&
+                spy >= c.top - 8 &&
+                spy <= c.top + bH + 8
+              ) {
+                hits += 1;
+              }
+            }
+            if (hits < bestHits) {
+              bestHits = hits;
+              chosen = c;
+              if (hits === 0) break;
+            }
+          }
         }
       }
+      const { left, top, caretDir } = chosen;
       const caretX = Math.max(14, Math.min(bW - 14, Math.round(px - left)));
       const caretY = Math.max(12, Math.min(bH - 12, Math.round(py - top)));
       this.milestoneBalloon.dataset.caret = caretDir;
@@ -3621,8 +4594,69 @@
       }
       const bare = title.replace(/[（(][^）)]*[）)]/g, '').trim();
       const inner = (title.match(/[（(]([^）)]*)[）)]/) || [])[1] || '';
-      const named = bare.length >= 2 ? [bare] : inner.split(/[·\s、]+/);
-      const keywords = [...new Set([title, ...named].map((s) => s.trim()).filter((s) => s.length >= 2))];
+      const stopKws = new Set([
+        '北方', '河北', '江东', '荆州', '益州', '荆益', '荆扬', '交州', '兖豫', '幽州', '冀州', '凉州',
+        '关陇', '汉中', '辽东', '西州', '湖南', '云南', '关中', '浙江', '河东', '内附', '日占', '荷占',
+        '德租', '英租', '俄租', '日军侵占', '沙俄侵占', '孤悬坚守', '总制院辖', '驻藏大臣', '两广统一',
+        '自治', '苏控', '北洋政府', '西南各系', '甘宁青',
+      ]);
+      const oneCharKws = {
+        周: ['周威烈王', '周安王', '周室', '东周', '洛邑'],
+        宋: ['宋国', '灭宋', '商丘'],
+        鲁: ['鲁国', '曲阜', '邹邑'],
+        越: ['越王', '越国', '灭越'],
+        蜀: ['灭蜀', '蜀郡', '巴、蜀'],
+        巴: ['灭巴', '巴、蜀', '巴郡'],
+        代: ['代王', '奔代'],
+        赵: ['赵王', '灭赵', '井陉'],
+        齐: ['齐王', '田横', '韩信'],
+        燕: ['燕王', '臧荼', '灭赵'],
+        晋: ['司马炎', '代魏建晋', '三国归晋', '王濬'],
+        元: ['大元', '元大都', '元军', '伯颜', '崖山'],
+        清: ['大清', '皇太极', '松锦', '入关'],
+      };
+      const uncuratedExtraKws = {
+        闽越: ['无诸', '百越', '鸿沟', '垓下'],
+        赤眉军: ['赤眉', '昆阳', '更始', '刘秀'],
+        '隗嚣 · 窦融': ['隗嚣', '窦融', '昆阳', '更始', '刘秀'],
+        '马腾(凉州)': ['董卓', '长安', '凉州'],
+        '刘表(荆州)': ['荆州', '隆中对', '赤壁', '三顾茅庐'],
+        '刘焉(益州)': ['益州', '董卓'],
+        '刘繇·孙氏(江东)': ['孙策', '江东'],
+        '士燮(交州)': ['交州', '赤壁', '荆州'],
+        '吴（杜伏威）': ['杜伏威', '江都', '瓦岗'],
+        '秦（薛举）': ['薛举', '李渊', '大兴'],
+        '凉（李轨）': ['李轨', '河西', '李渊'],
+        '唐 · 岐（关中）': ['李茂贞', '关中', '藩镇'],
+        大长和: ['南诏', '大理', '段思平'],
+        清源军: ['留从效', '陈洪进', '南唐', '纳土归宋'],
+        '武平（湖南）': ['湖南', '假道灭虢'],
+        方国珍: ['方国珍', '张士诚', '集庆'],
+        陈友定: ['陈友定', '北伐', '统一江南'],
+        '威海卫（英租）': ['强租', '胶州湾', '戊戌'],
+        '九龙新界（英租）': ['新界', '强租'],
+        '晋系（阎锡山）': ['南北军阀', '直皖战争', '直奉战争'],
+        '西北诸马（甘宁青）': ['南北军阀', '直皖战争'],
+        '新疆（杨增新）': ['南北军阀', '北伐'],
+        西南川滇黔桂各系: ['护法', '直皖战争', '广州', '孙中山'],
+        '川滇黔军阀（刘湘 · 唐继尧）': ['南北军阀', '北伐'],
+      };
+      const bareTokens = bare.split(/[·/、\s]+/);
+      const parts = [
+        bare,
+        ...bareTokens,
+        ...bareTokens.flatMap((t) => oneCharKws[t] || []),
+        ...inner.split(/[·/、\s]+/),
+        ...(oneCharKws[bare] || []),
+        ...(uncuratedExtraKws[title] || []),
+      ];
+      const keywords = [
+        ...new Set(
+          [title, ...parts]
+            .map((s) => s.trim())
+            .filter((s) => s.length >= 2 && !stopKws.has(s) && !/^\d/.test(s))
+        ),
+      ];
       return { key: `t:${title}@${from}`, zh: title, en: '', titles: [title], from, to, keywords, curated: false };
     }
 
@@ -3682,7 +4716,9 @@
     }
 
     _polityEvents(desc) {
-      const [mf, mt] = this._polityWindow(desc);
+      const [rawMf, rawMt] = this._polityWindow(desc);
+      const mf = desc.curated ? rawMf : rawMf - 1;
+      const mt = desc.curated ? rawMt : rawMt + 1;
       const kws = (desc.keywords || []).filter(Boolean);
       if (!kws.length) return [];
       const matches = (text) => kws.some((k) => String(text || '').includes(k));
@@ -3691,7 +4727,7 @@
       for (const d of this.dynasties || []) {
         for (const m of d.milestones || []) {
           if (m.year < mf || m.year > mt || !matches(m.headline)) continue;
-          const sig = `${m.year}:${m.site || ''}`;
+          const sig = `${m.year}:${m.headline.slice(0, 12)}`;
           if (seen.has(sig)) continue;
           seen.add(sig);
           out.push({ year: m.year, dynasty: d, milestone: m, coord: m.coord || null });
@@ -3701,6 +4737,17 @@
         if (e.year < mf || e.year > mt || !matches(e.zh)) continue;
         const sig = `${e.year}:${e.site || ''}`;
         if (seen.has(sig)) continue;
+        if (
+          out.some(
+            (x) =>
+              x.year === e.year &&
+              x.coord &&
+              e.coord &&
+              Math.hypot(x.coord[0] - e.coord[0], x.coord[1] - e.coord[1]) < 0.6
+          )
+        ) {
+          continue;
+        }
         seen.add(sig);
         const d = (this.dynasties || []).find((x) => x.key === e.dynastyKey) || null;
         out.push({ year: e.year, dynasty: d, landmark: e, coord: e.coord || null });
@@ -3788,10 +4835,12 @@
         return null;
       }
       this.eraFocus = null;
-      if (this._isMobileViewport() && !this.mobileChronicleOpen) this.toggleMobileChronicle(true);
+      // An embed has no chronicle pane, so never open the mobile bottom sheet over the map.
+      if (!this.embed && this._isMobileViewport() && !this.mobileChronicleOpen) this.toggleMobileChronicle(true);
       const pol = this._polityPolsInSnap(desc, snap)[0];
       desc.tint = (pol && pol.tint) || '';
       this.activePolity = desc;
+      if (this.embed) this._syncEmbedBadge();
       if (pol && opts.zoom !== false) this._zoomToPolity(pol.title, snap);
       if (cur) this._renderChroniclePane(cur);
       this._pinChroniclePaneTop(() => this.activePolity === desc);
@@ -3878,6 +4927,7 @@
       if (!this.activePolity) return;
       this.activePolity = null;
       this._scheduleUrlSync();
+      if (this.embed) this._syncEmbedBadge();
       this._resetPolityPaneChrome();
       const cur = this.dynasties[this.dynastyIdx];
       if (cur) this._renderChroniclePane(cur);
@@ -4547,7 +5597,7 @@
         const cityShift =
           this._settlementMask(dynasty, targetY) !== this._settlementMask(dynasty, prevY);
         const corrShift = this.corridors.some((c) => c.span && c.span[0] === m.year);
-        const hydroShift = this._hydroMask(targetY) !== this._hydroMask(prevY);
+        const hydroShift = this._hydroCourseMask(targetY) !== this._hydroCourseMask(prevY);
         const isMapChange = Boolean(m.isMapChange) || snapShift || cityShift || corrShift || hydroShift;
         const yrLabel =
           this.locale === 'en'
@@ -4590,28 +5640,9 @@
           }
           this.jumpToYear(targetY);
           this.openMilestoneBalloon(dynasty, m);
-          if (snapShift || m.isMapChange) {
-            const defCam = this._getDefaultCamera();
-            if (m.coord) {
-              const [sx, sy] = this.projector.toScreen(m.coord[0], m.coord[1]);
-              const outX = sx < defCam.x + defCam.w * 0.14 || sx > defCam.x + defCam.w * 0.86;
-              const outY = sy < defCam.y + defCam.h * 0.16 || sy > defCam.y + defCam.h * 0.84;
-              if (outX || outY) {
-                this._animateCameraTo({
-                  x: Math.max(-180, Math.min(1000 - defCam.w + 140, sx - defCam.w * 0.5)),
-                  y: Math.max(-150, Math.min(700 - defCam.h + 120, sy - defCam.h * 0.42)),
-                  w: defCam.w,
-                  h: defCam.h,
-                });
-              } else if (this.camera.w < defCam.w * 0.85) {
-                this.resetCamera();
-              }
-            } else if (this.camera.w < defCam.w * 0.85) {
-              this.resetCamera();
-            }
-          } else if (m.coord) {
-            this._panToward(m.coord[0], m.coord[1]);
-          }
+          this._frameMilestoneAnchors(dynasty, m, {
+            isMapChange: Boolean(snapShift || m.isMapChange),
+          });
         });
         ul.appendChild(li);
       }
@@ -4709,6 +5740,7 @@
       this.activePerson = null;
       this.activePersonEventIdx = -1;
       this._scheduleUrlSync();
+      if (this.embed) this._syncEmbedBadge();
       this._hidePersonFooter();
       this._lastPersonPinZoom = 0;
       this._lastPersonCardKey = null;
@@ -5052,8 +6084,7 @@
         !profile.isRelic &&
         Array.isArray(item && item.persons) &&
         item.persons.includes(profile.key) &&
-        item.persons.some((pk) => pk !== profile.key && peerKeys.includes(pk)) &&
-        peerKeys.includes(item.persons[0]);
+        item.persons.some((pk) => pk !== profile.key && peerKeys.includes(pk));
       const tokens = profile.isRelic
         ? []
         : Array.from(new Set([profile.zh, ...(profile.tokens || [])].filter(Boolean)));
@@ -5146,6 +6177,7 @@
           }
           const rawSite = m.site || d.seat || '';
           if (profile.key === 'liubang' && m.year === -207 && rawSite.startsWith('巨鹿')) continue;
+          if (profile.key === 'sunquan' && m.year === 230 && rawSite.startsWith('夷洲')) continue;
           const mKey = `${d.key}:${m.year}`;
           const mHit = this.enLocale.milestones && this.enLocale.milestones[mKey];
           const rawSiteEn =
@@ -5290,7 +6322,7 @@
     }
 
     static get PERSON_TRACK_PALETTE() {
-      return ['#bd2d22', '#1d5a7b', '#2f6b55', '#7a3e65'];
+      return ['#c4281c', '#233b8e', '#186a4b', '#7a2e68'];
     }
 
     _resolvePersonProfiles(personOrQuery) {
@@ -5395,26 +6427,32 @@
       }
 
       // Only merge & highlight true contemporaneous encounters (same place <= 45km AND |Δyear| <= 3).
-      // Pair closest year/distance matches first so exact same-year meetings are never stolen by an adjacent year.
-      for (let tIdx = 1; tIdx < tracks.length; tIdx++) {
-        const candPairs = [];
-        for (const evA of tracks[0].events) {
-          for (const evB of tracks[tIdx].events) {
-            const dy = Math.abs(evA.year - evB.year);
-            if (dy > 3) continue;
-            const { hit, km } = this._eventsSharePlace(evA, evB);
-            if (!hit) continue;
-            candPairs.push({ evA, evB, dy, km });
+      // Pair closest year/distance matches symmetrically across all track pairs (tA, tB) so 2-person and 3-person
+      // chronicles match with identical precision regardless of which subset of tracks is compared.
+      for (let tA = 0; tA < tracks.length; tA++) {
+        for (let tB = tA + 1; tB < tracks.length; tB++) {
+          const candPairs = [];
+          for (const evA of tracks[tA].events) {
+            for (const evB of tracks[tB].events) {
+              const dy = Math.abs(evA.year - evB.year);
+              if (dy > 3) continue;
+              const { hit, km } = this._eventsSharePlace(evA, evB);
+              if (!hit) continue;
+              candPairs.push({ evA, evB, dy, km });
+            }
           }
-        }
-        candPairs.sort((a, b) => a.dy - b.dy || a.km - b.km);
-        const usedB = new Set();
-        for (const { evA, evB } of candPairs) {
-          if ((evA._peerMatches && evA._peerMatches[tIdx]) || usedB.has(evB)) continue;
-          if (!evA._peerMatches) evA._peerMatches = {};
-          evA._peerMatches[tIdx] = evB;
-          evB._reservedForPrimary = evA;
-          usedB.add(evB);
+          candPairs.sort((a, b) => a.dy - b.dy || a.km - b.km);
+          const usedA = new Set();
+          const usedB = new Set();
+          for (const { evA, evB } of candPairs) {
+            if (usedA.has(evA) || usedB.has(evB)) continue;
+            if (!evA._peerLinks) evA._peerLinks = {};
+            if (!evB._peerLinks) evB._peerLinks = {};
+            evA._peerLinks[tB] = evB;
+            evB._peerLinks[tA] = evA;
+            usedA.add(evA);
+            usedB.add(evB);
+          }
         }
       }
 
@@ -5430,38 +6468,28 @@
       const merged = [];
       let sameTimeCount = 0;
       for (const evA of allRaw) {
-        if (evA._mergedIntoShared || evA._reservedForPrimary) continue;
+        if (evA._mergedIntoShared) continue;
         const group = [evA];
-        if (evA._peerMatches) {
-          for (const evB of Object.values(evA._peerMatches)) {
-            if (evB && !evB._mergedIntoShared) {
-              evB._mergedIntoShared = true;
-              evB.coord = [evA.coord[0], evA.coord[1]];
-              group.push(evB);
-            }
-          }
-        }
-        if (group.length === 1 && evA.personIdx > 0) {
-          for (let tIdx = evA.personIdx + 1; tIdx < tracks.length; tIdx++) {
-            let bestEv = null;
-            let bestDy = Infinity;
-            let bestKm = Infinity;
-            for (const evB of tracks[tIdx].events) {
-              if (evB._mergedIntoShared) continue;
-              const dy = Math.abs(evA.year - evB.year);
-              if (dy > 3) continue;
-              const { hit, km } = this._eventsSharePlace(evA, evB);
-              if (!hit) continue;
-              if (dy < bestDy || (dy === bestDy && km < bestKm)) {
-                bestDy = dy;
-                bestKm = km;
-                bestEv = evB;
-              }
-            }
-            if (bestEv) {
-              bestEv._mergedIntoShared = true;
-              bestEv.coord = [evA.coord[0], evA.coord[1]];
-              group.push(bestEv);
+        const usedTracks = new Set([evA.personIdx]);
+        const queue = [evA];
+        while (queue.length > 0) {
+          const cur = queue.shift();
+          if (!cur._peerLinks) continue;
+          const peerIdxList = Object.keys(cur._peerLinks)
+            .map(Number)
+            .sort((a, b) => a - b);
+          for (const tIdx of peerIdxList) {
+            if (usedTracks.has(tIdx)) continue;
+            const cand = cur._peerLinks[tIdx];
+            if (!cand || cand._mergedIntoShared) continue;
+            if (
+              Math.abs(evA.year - cand.year) <= 3 &&
+              this._eventsSharePlace(evA, cand).hit
+            ) {
+              usedTracks.add(tIdx);
+              cand._mergedIntoShared = true;
+              group.push(cand);
+              queue.push(cand);
             }
           }
         }
@@ -5469,6 +6497,9 @@
           evA._mergedIntoShared = true;
           group.sort((a, b) => a.personIdx - b.personIdx);
           const primary = group[0];
+          for (let gIdx = 1; gIdx < group.length; gIdx++) {
+            group[gIdx].coord = [primary.coord[0], primary.coord[1]];
+          }
           const textSource =
             group.find((gEv) => gEv.src === 'J') ||
             group.find((gEv) => gEv.src === 'M') ||
@@ -5809,7 +6840,8 @@
       const cx = (minX + maxX) * 0.5;
       const cy = (minY + maxY) * 0.5;
       const aspect = this._getViewportAspect();
-      const isDesktop = typeof window === 'undefined' || window.innerWidth > 900;
+      // Embeds keep the place/person card at the top right like desktop, not as a bottom sheet.
+      const isDesktop = typeof window === 'undefined' || window.innerWidth > 900 || Boolean(this.embed);
       if (!isDesktop) {
         const visTopFrac = this._getPersonVisibleTopFrac();
         const availFrac = Math.max(0.32, visTopFrac - 0.1);
@@ -5837,7 +6869,8 @@
       if (!ev || !ev.coord) return;
       const [tx, ty] = this.projector.toScreen(ev.coord[0], ev.coord[1]);
       const aspect = this._getViewportAspect();
-      const isDesktop = typeof window === 'undefined' || window.innerWidth > 900;
+      // Embeds keep the place/person card at the top right like desktop, not as a bottom sheet.
+      const isDesktop = typeof window === 'undefined' || window.innerWidth > 900 || Boolean(this.embed);
       if (!isDesktop) {
         const visTopFrac = this._getPersonVisibleTopFrac();
         const w = Math.max(320, Math.min(this.camera.w, 460));
@@ -6131,9 +7164,9 @@
         );
         if (isShared) {
           const parts = ev.participants;
-          const rDot = isCur ? 4.0 : 3.5;
-          const sep = isCur ? 8.6 : 7.6;
-          const pad = isCur ? 3.0 : 2.6;
+          const rDot = isCur ? 4.3 : 3.8;
+          const sep = isCur ? 9.2 : 8.2;
+          const pad = isCur ? 3.2 : 2.8;
           const pillW = (parts.length - 1) * sep + rDot * 2 + pad;
           const pillH = rDot * 2 + pad;
           if (isCur) {
@@ -6177,7 +7210,7 @@
             dot.style.color = pt.color;
           });
         } else if (isMultiBead) {
-          this._svgNode('circle', { class: 'jn-disc is-waypoint-bead', r: 3.2 }, inner);
+          this._svgNode('circle', { class: 'jn-disc is-waypoint-bead', r: 4.1 }, inner);
         } else {
           if (isCur) {
             this._svgNode('circle', { class: 'jn-pulse', r: 11.8 }, inner);
@@ -6875,9 +7908,10 @@
 
       // 1. Dynasty milestones
       for (const m of d.milestones || []) {
-        const veryClose = isCloseCoord(m.coord, 28);
+        const mCoords = this._milestoneCoords(m);
+        const veryClose = mCoords.some((mc) => isCloseCoord(mc, 28));
         const siteMatch = matchesSiteName(m.site);
-        if (siteMatch || veryClose || (!nearCity && isCloseCoord(m.coord, 48))) {
+        if (siteMatch || veryClose || (!nearCity && mCoords.some((mc) => isCloseCoord(mc, 48)))) {
           results.push({
             year: m.year,
             text: this.milestoneHeadline(d, m),
@@ -6913,6 +7947,15 @@
       }
 
       // 3. Curated landmark events
+      const sharesCjkBigram = (a, b) => {
+        const s1 = String(a || '');
+        const s2 = String(b || '');
+        for (let i = 0; i < s1.length - 1; i++) {
+          const bg = s1.slice(i, i + 2);
+          if (/^[\u4e00-\u9fa5]{2}$/.test(bg) && s2.includes(bg)) return true;
+        }
+        return false;
+      };
       for (const lm of HistoricalAtlasController.PLACE_LANDMARK_EVENTS) {
         const dynMatch = lm.dynastyKey
           ? (lm.dynastyKey === d.key || (lm.dynastyKey === 'nanbeichao' && d.key === 'nanbei'))
@@ -6920,7 +7963,9 @@
         if (!dynMatch) continue;
         if (isCloseCoord(lm.coord, 45)) {
           const dup = results.some((r) =>
-            r.fromLandmark ? r.year === lm.year : Math.abs(r.year - lm.year) <= 3
+            r.fromLandmark
+              ? r.year === lm.year && sharesCjkBigram(r.milestone && r.milestone.headline, lm.zh)
+              : Math.abs(r.year - lm.year) <= 3
           );
           if (!dup) {
             results.push({
@@ -6973,7 +8018,15 @@
       let bestMilePx = maxPx;
       if (this.grpMilestones && !this.grpMilestones.classList.contains('is-hidden')) {
         this.grpMilestones.querySelectorAll('.milestone-pin').forEach((pin) => {
-          if (pin.classList.contains('is-future')) return;
+          if (
+            pin.classList.contains('is-future') ||
+            (pin.classList.contains('is-past-occluded') && !pin.classList.contains('is-active')) ||
+            (pin.classList.contains('is-secondary-pin') &&
+              !pin.classList.contains('is-current') &&
+              !pin.classList.contains('is-active'))
+          ) {
+            return;
+          }
           const dPx = Math.hypot(Number(pin.dataset.x) - sx, Number(pin.dataset.y) - sy) * scale;
           if (dPx <= bestMilePx) {
             bestMilePx = dPx;
@@ -7642,6 +8695,23 @@
       const vf = this._id('viewport-frame');
       if (vf) vf.classList.add('has-active-genealogy');
       this._syncTracedPrefecture();
+      if (
+        this.activeMilestone &&
+        this.milestoneBalloon &&
+        !this.milestoneBalloon.classList.contains('is-hidden') &&
+        this.projector &&
+        typeof this.projector.greatCircleKm === 'function'
+      ) {
+        const amDyn = this.dynasties.find((d) => d.key === this.activeMilestone.dynastyKey);
+        const amAnchors = this._getMilestoneAnchors(amDyn, this.activeMilestone.milestone);
+        const matchIdx = amAnchors.findIndex(
+          (a) => a.coord && this.projector.greatCircleKm([lng, lat], a.coord) <= 30
+        );
+        if (matchIdx >= 0 && matchIdx !== this.activeMilestone.siteIdx) {
+          this._selectMilestoneAnchor(matchIdx, amAnchors);
+        }
+        this._positionMilestoneBalloon();
+      }
 
       const renderSubAndList = () => {
         const subEl = this._id('genealogy-sub');
@@ -7877,10 +8947,15 @@
     // Each dynasty gets a scrubber band proportional to its span, floored at 60 years.
     _initTimelineBands() {
       const minSpan = 60;
+      // An embed restricted to [from, to] shows only that window, linearly, so a 50-year range is
+      // as easy to scrub as the full 2,400 years; otherwise short dynasties get a minimum width.
+      const clip = this._bandClip;
       this.bandWeights = this.dynasties.map((d) =>
-        Math.max(d.toYear - d.fromYear, minSpan)
+        clip
+          ? Math.max(0, Math.min(clip[1], d.toYear) - Math.max(clip[0], d.fromYear))
+          : Math.max(d.toYear - d.fromYear, minSpan)
       );
-      this.totalBandWeight = this.bandWeights.reduce((acc, w) => acc + w, 0);
+      this.totalBandWeight = this.bandWeights.reduce((acc, w) => acc + w, 0) || 1;
       this.bandOffsets = [];
       this.bandWeights.reduce((acc, w, i) => {
         this.bandOffsets[i] = acc / this.totalBandWeight;
@@ -7888,11 +8963,18 @@
       }, 0);
     }
 
+    // [lo, hi] years of a dynasty's band, clipped to the embed window when there is one.
+    _bandYearSpan(d) {
+      const clip = this._bandClip;
+      return clip ? [Math.max(clip[0], d.fromYear), Math.min(clip[1], d.toYear)] : [d.fromYear, d.toYear];
+    }
+
     _yearToProgress(y) {
       const idx = this._findDynastyIndex(y);
       const d = this.dynasties[idx];
-      const span = Math.max(1, d.toYear - d.fromYear);
-      const local = Math.max(0, Math.min(1, (y - d.fromYear) / span));
+      const [lo, hi] = this._bandYearSpan(d);
+      const span = Math.max(1, hi - lo);
+      const local = Math.max(0, Math.min(1, (y - lo) / span));
       return (
         this.bandOffsets[idx] +
         local * (this.bandWeights[idx] / this.totalBandWeight)
@@ -7904,9 +8986,11 @@
       let idx = this.dynasties.length - 1;
       while (idx > 0 && this.bandOffsets[idx] > clamped) idx--;
       const d = this.dynasties[idx];
+      const [lo, hi] = this._bandYearSpan(d);
       const weightFrac = this.bandWeights[idx] / this.totalBandWeight;
+      if (!weightFrac) return lo;
       const local = (clamped - this.bandOffsets[idx]) / weightFrac;
-      return Math.round(d.fromYear + local * (d.toYear - d.fromYear));
+      return Math.round(lo + local * (hi - lo));
     }
 
     // Coalesce pointermove into one jumpToYear per animation frame and skip unchanged years.
@@ -7996,6 +9080,8 @@
         const cell = document.createElement('div');
         cell.className = 'band-cell';
         cell.style.flex = `${this.bandWeights[idx]} 1 0`;
+        // Dynasties outside an embed's [from, to] window take no room on its timeline.
+        if (!this.bandWeights[idx]) cell.style.display = 'none';
         cell.style.background = d.tint;
         cell.dataset.dynastyIdx = idx;
         cell.setAttribute('role', 'button');
@@ -8014,14 +9100,15 @@
         lbl.className = 'band-label';
         cell.appendChild(lbl);
 
-        const span = Math.max(1, d.toYear - d.fromYear);
+        const [bandLo, bandHi] = this._bandYearSpan(d);
+        const span = Math.max(1, bandHi - bandLo);
         if (Array.isArray(d.phases) && d.phases.length > 1) {
           for (let i = 0; i < d.phases.length - 1; i++) {
             const u = d.phases[i].until;
-            if (u > d.fromYear && u < d.toYear) {
+            if (u > bandLo && u < bandHi) {
               const pt = document.createElement('i');
               pt.className = 'band-phase-tick';
-              pt.style.left = `${(((u - d.fromYear) / span) * 100).toFixed(2)}%`;
+              pt.style.left = `${(((u - bandLo) / span) * 100).toFixed(2)}%`;
               cell.appendChild(pt);
             }
           }
@@ -8029,7 +9116,8 @@
         const seenEvPct = new Set();
         for (const m of d.milestones || []) {
           const my = this._clampYearToDynasty(d, m.year);
-          const pct = Math.max(3, Math.min(97, Math.round(((my - d.fromYear) / span) * 100)));
+          if (my < bandLo || my > bandHi) continue;
+          const pct = Math.max(3, Math.min(97, Math.round(((my - bandLo) / span) * 100)));
           if (seenEvPct.has(pct)) continue;
           seenEvPct.add(pct);
           const dot = document.createElement('i');
@@ -8042,6 +9130,7 @@
 
         const tick = document.createElement('span');
         tick.style.left = `${(this.bandOffsets[idx] * 100).toFixed(3)}%`;
+        if (!this.bandWeights[idx]) tick.style.display = 'none';
         ticks.appendChild(tick);
       });
       const endTick = document.createElement('span');
@@ -8077,16 +9166,23 @@
         }
         const tk = tickNodes[idx];
         if (tk) {
-          tk.textContent =
-            d.fromYear <= 0
-              ? this.locale === 'en'
-                ? `${-d.fromYear} BCE`
-                : `前${-d.fromYear}`
-              : `${d.fromYear}`;
+          const y = this._bandYearSpan(d)[0];
+          tk.textContent = y <= 0 ? (this.locale === 'en' ? `${-y} BCE` : `前${-y}`) : `${y}`;
         }
       });
       const endTick = this._id('tick-present');
-      if (endTick) endTick.textContent = this.uiStr('tick_now', '今');
+      if (endTick) {
+        // A clipped embed timeline ends at its `to` year, not at the present day.
+        const end = this._bandClip ? this._bandClip[1] : null;
+        endTick.textContent =
+          end === null
+            ? this.uiStr('tick_now', '今')
+            : end <= 0
+              ? this.locale === 'en'
+                ? `${-end} BCE`
+                : `前${-end}`
+              : `${end}`;
+      }
       this._fitBandLabels();
     }
 
@@ -8098,12 +9194,19 @@
       let lastRight = -Infinity;
       for (let i = 0; i < cells.length; i++) {
         const cell = cells[i];
-        cell.classList.remove('is-narrow');
+        cell.classList.remove('is-narrow', 'is-compact');
         const lbl = cell.querySelector('.band-label');
-        const narrow = lbl
-          ? lbl.scrollWidth > cell.clientWidth - 4
-          : cell.scrollWidth > cell.clientWidth + 1;
-        cell.classList.toggle('is-narrow', narrow);
+        if (lbl) {
+          if (lbl.scrollWidth > cell.clientWidth - 2) {
+            cell.classList.add('is-compact');
+            if (lbl.scrollWidth > cell.clientWidth - 2) {
+              cell.classList.remove('is-compact');
+              cell.classList.add('is-narrow');
+            }
+          }
+        } else if (cell.scrollWidth > cell.clientWidth + 1) {
+          cell.classList.add('is-narrow');
+        }
         const tk = tickNodes[i];
         if (tk) {
           const rect = tk.getBoundingClientRect();
@@ -8142,21 +9245,29 @@
         // Clamp bubble strictly inside [0, railW - bW] so text never clips off-screen
         const maxLeft = Math.max(0, railW - bW);
         const leftPx = Math.max(0, Math.min(maxLeft, handleX - bW * 0.5));
-        bubble.style.left = `${leftPx.toFixed(1)}px`;
-        bubble.style.transform = 'none';
+        bubble.style.left = '0px';
+        bubble.style.transform = `translateX(${leftPx.toFixed(1)}px)`;
 
         // Direct caret arrow to point straight at the timeline thumb
         const arrowX = Math.max(8, Math.min(bW - 8, handleX - leftPx));
         bubble.style.setProperty('--arrow-left', `${arrowX.toFixed(1)}px`);
       }
 
-      const handle = this._id('scrubber-handle');
-      if (handle) handle.style.left = `${pct}%`;
+      const motion = this._id('scrubber-motion');
+      if (motion) {
+        // The wrapper spans the rail, so percentage transforms use the same
+        // reference width as the previous absolute-positioned thumb.
+        motion.style.transform = `translateX(${pct}%)`;
+      } else {
+        const handle = this._id('scrubber-handle');
+        if (handle) handle.style.left = `${pct}%`;
+      }
 
       const track = this._id('scrubber-track');
       if (track) track.setAttribute('aria-valuenow', String(this.year));
       const inpYear = this._id('inp-year');
       if (inpYear) inpYear.value = this.year === 0 ? 1 : this.year;
+      if (this.embed) this._syncEmbedBadge();
       if (this._lastActiveBandIdx !== this.dynastyIdx) {
         const bandsEl = this._id('dynasty-bands');
         if (bandsEl) {
@@ -8303,7 +9414,7 @@
           if (pos !== -1 && nextPos >= 0 && nextPos < sameYrIdxs.length) {
             const targetM = curDyn.milestones[sameYrIdxs[nextPos]];
             this.openMilestoneBalloon(curDyn, targetM, { fromStep: true });
-            this._ensureCoordInView(targetM.coord);
+            this._ensureMilestoneInView(curDyn, targetM);
             return;
           }
         }
@@ -8354,7 +9465,7 @@
             ? this.activeMilestone.milestone
             : matched[matched.length - 1];
         if (activeM && activeM.coord) {
-          this._ensureCoordInView(activeM.coord);
+          this._ensureMilestoneInView(nextDyn, activeM);
         }
       }
     }
@@ -8382,8 +9493,8 @@
       const isEn = this.locale === 'en';
       btn.setAttribute('aria-label', isEn ? `Playback speed ${labelText}` : `播放倍速 ${labelText}`);
       btn.title = isEn
-        ? `Playback speed ${labelText} (click to cycle 0.25× / 0.5× / 1× / 2×)`
-        : `播放倍速 ${labelText}（点击切换 0.25× / 0.5× / 1× / 2×）`;
+        ? `Playback speed ${labelText} (click to cycle 0.5× / 1× / 2× / 4×)`
+        : `播放倍速 ${labelText}（点击切换 0.5× / 1× / 2× / 4×）`;
     }
 
     setPlaySpeed(speed) {
@@ -8416,6 +9527,8 @@
       const btn = this._id('act-autoplay');
       if (!btn) return;
       const isPlaying = Boolean(this.playing || this.personTimer);
+      const dock = this._id('scrubber-dock');
+      if (dock && dock.classList) dock.classList.toggle('is-autoplaying', Boolean(this.playing));
       btn.innerHTML = isPlaying ? SVG_ICONS.pause : SVG_ICONS.play;
       btn.classList.toggle('is-playing', isPlaying);
       btn.setAttribute('aria-pressed', String(isPlaying));
@@ -8444,22 +9557,28 @@
       this.closeMilestoneBalloon();
       this._updateAutoplayUi();
       if (this.year >= this.maxYear) this.jumpToYear(this.minYear);
-      this.playProgress = this._yearToProgress(this.year);
-      this.playHoldTicks = 0;
-      this.playShownTicks = AUTOPLAY_MIN_SHOW_TICKS;
+      // Leave the starting frame on screen for one event beat before the first jump.
+      this.playHoldTicks = AUTOPLAY_EVENT_TICKS;
       this._syncAutoMilestoneBalloon(this.dynasties[this.dynastyIdx]);
       this.playInterval = setInterval(() => this._autoplayTick(), this._autoplayIntervalMs());
     }
 
-    // Sorted milestone years the autoplay must land on, with the ones it holds on.
+    // Sorted years the autoplay lands on: every milestone year plus every territory-snapshot
+    // boundary. `hold` marks the nodes that redraw the map (border change, dynasty opening,
+    // snapshot switch) so the border diff gets the longer dwell.
     _autoplayStops() {
       if (!this._autoplayStopList) {
         const holdByYear = new Map();
+        const mark = (year, hold) => holdByYear.set(year, Boolean(holdByYear.get(year) || hold));
         for (const d of this.dynasties) {
+          mark(d.fromYear, true);
+          if (Array.isArray(d.phases)) {
+            for (const ph of d.phases) {
+              if (ph.until > d.fromYear && ph.until < d.toYear) mark(ph.until, true);
+            }
+          }
           for (const m of d.milestones || []) {
-            const y = this._clampYearToDynasty(d, m.year);
-            const opensDynasty = m.year === d.fromYear;
-            holdByYear.set(y, Boolean(holdByYear.get(y) || m.isMapChange || opensDynasty));
+            mark(this._clampYearToDynasty(d, m.year), m.isMapChange);
           }
         }
         this._autoplayStopList = [...holdByYear]
@@ -8478,24 +9597,12 @@
         this.stopAutoplay();
         return;
       }
-      const step = AUTOPLAY_TICK_MS / AUTOPLAY_FULL_RUN_MS;
-      this.playShownTicks++;
-      this.playProgress += step;
-      let next = this.playProgress >= 1 ? this.maxYear : this._progressToYear(this.playProgress);
-      if (next === 0) next = 1;
-      if (next <= this.year) return;
-      const stop = this._autoplayStops().find((s) => s.year > this.year && s.year <= next);
-      if (stop) {
-        // Let the current callout stay readable before the next milestone replaces it.
-        if (this.playShownTicks < AUTOPLAY_MIN_SHOW_TICKS) {
-          this.playProgress -= step;
-          return;
-        }
-        next = stop.year;
-        this.playShownTicks = stop.hold ? AUTOPLAY_MIN_SHOW_TICKS : 0;
-        if (stop.hold) this.playHoldTicks = AUTOPLAY_HOLD_TICKS;
-      }
-      this.jumpToYear(next);
+      const stop = this._autoplayStops().find((s) => s.year > this.year);
+      const next = stop ? Math.min(stop.year, this.maxYear) : this.maxYear;
+      // This tick already counts as the first beat on the new node; a camera pan inside
+      // jumpToYear may raise playHoldTicks further (see _syncAutoMilestoneBalloon).
+      this.playHoldTicks = (stop && stop.hold ? AUTOPLAY_MAP_CHANGE_TICKS : AUTOPLAY_EVENT_TICKS) - 1;
+      this.jumpToYear(next === 0 ? 1 : next);
     }
 
     stopAutoplay() {
@@ -8523,38 +9630,57 @@
       if (this.musicAudio) return this.musicAudio;
       const audio = new Audio();
       audio.preload = 'auto';
+      audio.playsInline = true;
       audio.volume = 0.48;
       audio.addEventListener('ended', () => {
         if (this.musicPlaying) this.nextMusicTrack();
       });
       audio.addEventListener('error', () => {
-        if (!this.musicPlaying) return;
-        const t = HistoricalAtlasController.GUQIN_TRACKS[this.musicTrackIdx];
-        if (audio.src !== t.ogg) {
-          audio.src = t.ogg;
-          audio.play().catch(() => {});
-        }
+        this._handleMusicLoadError(this._musicPlaySeq);
       });
       this.musicAudio = audio;
       return audio;
     }
 
+    _handleMusicLoadError(seq) {
+      if (!this.musicPlaying || seq !== this._musicPlaySeq) return;
+      const tracks = HistoricalAtlasController.GUQIN_TRACKS;
+      const t = tracks[this.musicTrackIdx % tracks.length];
+      const audio = this.musicAudio;
+      if (audio && t && t.ogg && !audio._triedFallback) {
+        audio._triedFallback = true;
+        audio.src = t.ogg;
+        audio.play().catch((err) => {
+          if (err && err.name === 'AbortError') return;
+          if (seq !== this._musicPlaySeq) return;
+          this.musicPlaying = false;
+          this._updateMusicUi();
+        });
+      } else {
+        this.musicPlaying = false;
+        this._updateMusicUi();
+      }
+    }
+
     _playCurrentMusicTrack() {
       const tracks = HistoricalAtlasController.GUQIN_TRACKS;
       const t = tracks[this.musicTrackIdx % tracks.length];
+      if (!t) return;
+      const seq = (this._musicPlaySeq = (this._musicPlaySeq || 0) + 1);
       const audio = this._ensureMusicAudio();
+      audio._triedFallback = false;
       audio.src = t.mp3;
       this.musicPlaying = true;
       this._updateMusicUi();
-      audio.play().catch(() => {
-        if (!this.musicPlaying) return;
-        audio.src = t.ogg;
-        audio.play().catch(() => {});
+      audio.play().catch((err) => {
+        if (err && err.name === 'AbortError') return;
+        this._handleMusicLoadError(seq);
       });
     }
 
     toggleMusic() {
       if (this.musicPlaying) {
+        this._musicPlaySeq = (this._musicPlaySeq || 0) + 1;
         this.musicPlaying = false;
         if (this.musicAudio) this.musicAudio.pause();
         this._updateMusicUi();
@@ -8954,7 +10080,7 @@
           if (showProvNames) {
             const fontSize = (9.5 * s).toFixed(1);
             this.grpProvNames.querySelectorAll('.province-caption').forEach((node) => {
-              node.setAttribute('font-size', fontSize);
+              setSvgAttribute(node, 'font-size', fontSize);
             });
           }
           if (this.activePerson && this.grpJourney) {
@@ -8971,7 +10097,7 @@
       const applyNodeScale = (node, xStr, yStr, rotStr = null) => {
         const prefix = `translate(${xStr},${yStr}) scale(`;
         const suffix = rotStr !== null ? `) rotate(${rotStr})` : ')';
-        node.setAttribute('transform', prefix + invScale + suffix);
+        setSvgAttribute(node, 'transform', prefix + invScale + suffix);
         scaleNodes.push({ node, prefix, suffix });
       };
 
@@ -9001,7 +10127,9 @@
       }
       if (this.grpRivers) {
         this.grpRivers.querySelectorAll('.hydro-label').forEach((node) => {
-          if (node.classList.contains('is-range') && !showPasses) return;
+          if (node.classList.contains('is-range') || node.classList.contains('is-detail-hydro')) {
+            return;
+          }
           const x = node.getAttribute('data-x');
           const y = node.getAttribute('data-y');
           const rot = node.getAttribute('data-rot') || '0';
@@ -9053,23 +10181,52 @@
       }
       if (showMilestones) {
         this.svg.querySelectorAll('.milestone-pin').forEach((pin) => {
-          if (pin.classList.contains('is-future')) return;
+          if (
+            pin.classList.contains('is-future') ||
+            (pin.classList.contains('is-past-occluded') && !pin.classList.contains('is-active')) ||
+            (pin.classList.contains('is-secondary-pin') &&
+              !pin.classList.contains('is-current') &&
+              !pin.classList.contains('is-active'))
+          ) {
+            return;
+          }
           const mx = parseFloat(pin.getAttribute('data-x'));
           const my = parseFloat(pin.getAttribute('data-y'));
           if (!isNaN(mx)) {
+            const pr =
+              (pin.classList.contains('is-current') || pin.classList.contains('is-active')
+                ? 3.9
+                : 3.0) * s;
             occupied.push({
-              x1: mx - 3.6 * s,
-              y1: my - 3.6 * s,
-              x2: mx + 3.6 * s,
-              y2: my + 3.6 * s,
+              x1: mx - pr,
+              y1: my - pr,
+              x2: mx + pr,
+              y2: my + pr,
             });
           }
         });
       }
+      const rotatedHydroBoxes = (cx, cy, hw, hh, ux, uy) => {
+        if (Math.abs(uy) <= 0.25) {
+          const ex = Math.abs(ux) * hw + Math.abs(uy) * hh;
+          const ey = Math.abs(uy) * hw + Math.abs(ux) * hh;
+          return [{ x1: cx - ex, y1: cy - ey, x2: cx + ex, y2: cy + ey }];
+        }
+        const segHw = hw * 0.36;
+        const ex = Math.abs(ux) * segHw + Math.abs(uy) * hh;
+        const ey = Math.abs(uy) * segHw + Math.abs(ux) * hh;
+        const step = hw * 0.62;
+        return [-step, 0, step].map((t) => {
+          const sx = cx + t * ux;
+          const sy = cy + t * uy;
+          return { x1: sx - ex, y1: sy - ey, x2: sx + ex, y2: sy + ey };
+        });
+      };
       if (showRivers) {
         this.grpRivers.querySelectorAll('.hydro-label').forEach((hl) => {
-          // Mountain-range names are background context: city labels must never yield to them.
-          if (hl.classList.contains('is-range')) return;
+          // Mountain-range and zoom-gated boundary-river names are background context:
+          // city, polity, pass, and region labels must never yield to them.
+          if (hl.classList.contains('is-range') || hl.classList.contains('is-detail-hydro')) return;
           const hx = parseFloat(hl.getAttribute('data-x'));
           const hy = parseFloat(hl.getAttribute('data-y'));
           if (!isNaN(hx) && !isNaN(hy)) {
@@ -9077,7 +10234,9 @@
             const fPx = isLake ? 8.2 : hl.classList.contains('is-trunk') ? 8.6 : 7.4;
             const hw = (this._estimateLocalTextWidth(hl.textContent, fPx, 1.5) * 0.5 + (isLake ? 8 : 4)) * s;
             const hh = (isLake ? 8.5 : 5.5) * s;
-            occupied.push({ x1: hx - hw, y1: hy - hh, x2: hx + hw, y2: hy + hh });
+            const rad = (parseFloat(hl.getAttribute('data-rot') || '0') || 0) * (Math.PI / 180);
+            const boxes = rotatedHydroBoxes(hx, hy, hw, hh, Math.cos(rad), Math.sin(rad));
+            for (let k = 0; k < boxes.length; k++) occupied.push(boxes[k]);
           }
         });
       }
@@ -9249,9 +10408,9 @@
             node.classList.remove('is-label-crowded');
             if (node.dataset.appliedDir !== bestDir) {
               node.dataset.appliedDir = bestDir;
-              nameEl.setAttribute('x', String(best.dx));
-              nameEl.setAttribute('y', String(best.dy1));
-              nameEl.setAttribute('text-anchor', best.anchor);
+              setSvgAttribute(nameEl, 'x', String(best.dx));
+              setSvgAttribute(nameEl, 'y', String(best.dy1));
+              setSvgAttribute(nameEl, 'text-anchor', best.anchor);
             }
             occupied.push(best.box);
             return;
@@ -9284,9 +10443,9 @@
         node.classList.remove('is-label-crowded');
         if (node.dataset.appliedDir !== bestDir) {
           node.dataset.appliedDir = bestDir;
-          nameEl.setAttribute('x', String(best.dx));
-          nameEl.setAttribute('y', String(best.dy1));
-          nameEl.setAttribute('text-anchor', best.anchor);
+          setSvgAttribute(nameEl, 'x', String(best.dx));
+          setSvgAttribute(nameEl, 'y', String(best.dy1));
+          setSvgAttribute(nameEl, 'text-anchor', best.anchor);
         }
         occupied.push(best.box);
       };
@@ -9473,8 +10632,8 @@
         node.dataset.placed = '1';
         const bestXStr = bestX.toFixed(1);
         const bestYStr = bestY.toFixed(1);
-        node.setAttribute('data-x', bestXStr);
-        node.setAttribute('data-y', bestYStr);
+        setSvgAttribute(node, 'data-x', bestXStr);
+        setSvgAttribute(node, 'data-y', bestYStr);
         applyNodeScale(node, bestXStr, bestYStr);
         occupied.push(bestBox);
       }
@@ -9562,8 +10721,8 @@
           node.classList.remove('is-crowded-hidden');
           const bestXStr = bestX.toFixed(1);
           const bestYStr = bestY.toFixed(1);
-          node.setAttribute('data-x', bestXStr);
-          node.setAttribute('data-y', bestYStr);
+          setSvgAttribute(node, 'data-x', bestXStr);
+          setSvgAttribute(node, 'data-y', bestYStr);
           applyNodeScale(node, bestXStr, bestYStr);
           occupied.push(bestBox);
         });
@@ -9618,8 +10777,8 @@
             node.dataset.placed = '1';
             const cxStr = cx.toFixed(1);
             const cyStr = cy.toFixed(1);
-            node.setAttribute('data-x', cxStr);
-            node.setAttribute('data-y', cyStr);
+            setSvgAttribute(node, 'data-x', cxStr);
+            setSvgAttribute(node, 'data-y', cyStr);
             applyNodeScale(node, cxStr, cyStr);
             node.classList.remove('is-crowded-hidden');
             occupied.push(candBox);
@@ -9631,8 +10790,8 @@
           node.dataset.placed = '1';
           const bxStr = baseX.toFixed(1);
           const byStr = baseY.toFixed(1);
-          node.setAttribute('data-x', bxStr);
-          node.setAttribute('data-y', byStr);
+          setSvgAttribute(node, 'data-x', bxStr);
+          setSvgAttribute(node, 'data-y', byStr);
           node.classList.add('is-crowded-hidden');
         }
       });
@@ -9698,8 +10857,8 @@
           node.dataset.placed = '1';
           const cxStr = cx.toFixed(1);
           const cyStr = cy.toFixed(1);
-          node.setAttribute('data-x', cxStr);
-          node.setAttribute('data-y', cyStr);
+          setSvgAttribute(node, 'data-x', cxStr);
+          setSvgAttribute(node, 'data-y', cyStr);
           applyNodeScale(node, cxStr, cyStr);
           node.classList.remove('is-crowded-hidden');
           occupied.push(candBox);
@@ -9710,42 +10869,107 @@
           node.dataset.placed = '1';
           const bxStr = baseX.toFixed(1);
           const byStr = baseY.toFixed(1);
-          node.setAttribute('data-x', bxStr);
-          node.setAttribute('data-y', byStr);
+          setSvgAttribute(node, 'data-x', bxStr);
+          setSvgAttribute(node, 'data-y', byStr);
           node.classList.add('is-crowded-hidden');
         }
       }
 
-      // Tier 6: Mountain-range names are the lowest priority; hide rather than cover any label above.
-      // They share the pass zoom threshold so the overview keeps its current density.
+      // Tier 6: Mountain-range and boundary-river names share the pass/tier-2 zoom gate and
+      // are lowest priority: slide along the ridge/channel tangent to dodge other labels, else hide.
       if (showRivers) {
-        this.grpRivers.querySelectorAll('.hydro-label.is-range').forEach((node) => {
+        const hydroOffsets = [
+          [0, 0],
+          [14, 0],
+          [-14, 0],
+          [26, 0],
+          [-26, 0],
+          [0, -7],
+          [0, 7],
+          [16, -6],
+          [-16, 6],
+          [38, 0],
+          [-38, 0],
+        ];
+        const detailHydroNodes = this.grpRivers.querySelectorAll(
+          '.hydro-label.is-range, .hydro-label.is-detail-hydro'
+        );
+
+        for (const node of detailHydroNodes) {
           if (!showPasses) {
+            // Below the gate nothing is "placed": dropping the lock lets the label re-seat
+            // itself the moment the user zooms back in, instead of staying hidden.
             node.classList.add('is-crowded-hidden');
-            if (!zoomOnly) delete node.dataset.placed;
-            return;
+            delete node.dataset.placed;
+            continue;
           }
-          if (zoomOnly && node.dataset.placed === '1') {
-            return;
+          const baseX = parseFloat(node.getAttribute('data-base-x') || node.getAttribute('data-x'));
+          const baseY = parseFloat(node.getAttribute('data-base-y') || node.getAttribute('data-y'));
+          if (isNaN(baseX) || isNaN(baseY)) continue;
+          const rotStr = node.getAttribute('data-rot') || '0';
+          const rad = (parseFloat(rotStr) || 0) * (Math.PI / 180);
+          const isRange = node.classList.contains('is-range');
+          const isDesert = node.classList.contains('is-desert');
+          const hw =
+            (this._estimateLocalTextWidth(
+              node.textContent,
+              isDesert ? 9.0 : isRange ? 7.4 : 6.6,
+              isDesert ? 5.5 : isRange ? 2.6 : 1.1
+            ) *
+              0.5 +
+              2.2) *
+            s;
+          const hh = (isDesert ? 5.6 : isRange ? 4.6 : 4.3) * s;
+          const ux = Math.cos(rad);
+          const uy = Math.sin(rad);
+          const nx = -uy;
+          const ny = ux;
+          const maxOvArea = 4 * hw * hh * 0.045;
+
+          // Only a visible placement is worth locking across zoom frames; a label that was
+          // crowded out keeps retrying, since shrinking text frees room as the user zooms in.
+          if (zoomOnly && node.dataset.placed === '1' && !node.classList.contains('is-crowded-hidden')) {
+            const cx = parseFloat(node.getAttribute('data-x'));
+            const cy = parseFloat(node.getAttribute('data-y'));
+            applyNodeScale(node, cx.toFixed(1), cy.toFixed(1), rotStr);
+            const boxes = rotatedHydroBoxes(cx, cy, hw, hh, ux, uy);
+            for (let k = 0; k < boxes.length; k++) occupied.push(boxes[k]);
+            continue;
           }
-          const rx = parseFloat(node.getAttribute('data-x'));
-          const ry = parseFloat(node.getAttribute('data-y'));
-          if (isNaN(rx) || isNaN(ry)) return;
-          const rad = (parseFloat(node.getAttribute('data-rot')) || 0) * (Math.PI / 180);
-          const hw = (this._estimateLocalTextWidth(node.textContent, 7.2, 3.6) * 0.5 + 2) * s;
-          const hh = 4.6 * s;
-          const ex = Math.abs(Math.cos(rad)) * hw + Math.abs(Math.sin(rad)) * hh;
-          const ey = Math.abs(Math.sin(rad)) * hw + Math.abs(Math.cos(rad)) * hh;
-          const box = { x1: rx - ex, y1: ry - ey, x2: rx + ex, y2: ry + ey };
-          const crowded = overlapArea(box) > (box.x2 - box.x1) * (box.y2 - box.y1) * 0.03;
-          node.dataset.placed = '1';
-          node.classList.toggle('is-crowded-hidden', crowded);
-          if (!crowded) occupied.push(box);
-        });
+
+          let placed = false;
+          for (let i = 0; i < hydroOffsets.length; i++) {
+            const [along, perp] = hydroOffsets[i];
+            const cx = baseX + (along * ux + perp * nx) * s;
+            const cy = baseY + (along * uy + perp * ny) * s;
+            const boxes = rotatedHydroBoxes(cx, cy, hw, hh, ux, uy);
+            let totalOv = 0;
+            for (let k = 0; k < boxes.length; k++) {
+              totalOv += overlapArea(boxes[k]);
+              if (totalOv > maxOvArea) break;
+            }
+            if (totalOv <= maxOvArea) {
+              node.dataset.placed = '1';
+              const cxStr = cx.toFixed(1);
+              const cyStr = cy.toFixed(1);
+              setSvgAttribute(node, 'data-x', cxStr);
+              setSvgAttribute(node, 'data-y', cyStr);
+              applyNodeScale(node, cxStr, cyStr, rotStr);
+              node.classList.remove('is-crowded-hidden');
+              for (let k = 0; k < boxes.length; k++) occupied.push(boxes[k]);
+              placed = true;
+              break;
+            }
+          }
+          if (!placed) {
+            delete node.dataset.placed;
+            node.classList.add('is-crowded-hidden');
+          }
+        }
       }
 
       this.grpProvNames.querySelectorAll('.province-caption').forEach((node) => {
-        node.setAttribute('font-size', (9.5 * s).toFixed(1));
+        setSvgAttribute(node, 'font-size', (9.5 * s).toFixed(1));
       });
       this._zoomScaleNodes = scaleNodes;
       this._lastZoomStateKey = zoomStateKey;
@@ -9814,12 +11038,12 @@
         }
       }
       for (const p of pts) {
-        p.n.setAttribute('transform', `translate(${p.x.toFixed(1)},${p.y.toFixed(1)}) scale(${pinScaleStr})`);
-        p.n.setAttribute('data-ox', p.ox.toFixed(2));
-        p.n.setAttribute('data-oy', p.oy.toFixed(2));
+        setSvgAttribute(p.n, 'transform', `translate(${p.x.toFixed(1)},${p.y.toFixed(1)}) scale(${pinScaleStr})`);
+        setSvgAttribute(p.n, 'data-ox', p.ox.toFixed(2));
+        setSvgAttribute(p.n, 'data-oy', p.oy.toFixed(2));
         const shiftEl = p.n.querySelector('.jn-pin-shift');
         if (shiftEl) {
-          shiftEl.setAttribute('transform', `translate(${p.ox.toFixed(2)},${p.oy.toFixed(2)})`);
+          setSvgAttribute(shiftEl, 'transform', `translate(${p.ox.toFixed(2)},${p.oy.toFixed(2)})`);
         }
       }
       const placedRects = pts.map((p) => {
@@ -9919,9 +11143,9 @@
           lbl.style.display = '';
           lbl.style.textAnchor = chosenSlot.anchor;
           lbl.dataset.slotIdx = String(chosenSlot.idx);
-          lbl.setAttribute('text-anchor', chosenSlot.anchor);
-          lbl.setAttribute('x', chosenSlot.lx);
-          lbl.setAttribute('y', chosenSlot.ly);
+          setSvgAttribute(lbl, 'text-anchor', chosenSlot.anchor);
+          setSvgAttribute(lbl, 'x', chosenSlot.lx);
+          setSvgAttribute(lbl, 'y', chosenSlot.ly);
           placedRects.push(chosenRect);
         } else {
           lbl.style.display = 'none';
@@ -9929,8 +11153,21 @@
       }
     }
 
-    _animateCameraTo(targetCam) {
+    _cancelCameraAnimation() {
+      this._cameraTarget = null;
+      this._cameraTargetIsZoom = false;
+      if (this.flyRaf == null) return;
+      cancelAnimationFrame(this.flyRaf);
+      this.flyRaf = null;
+      // Cancellation skips the flight's final frame, including its cleanup.
+      if (this.activePerson) this._invalidateTypographyLayout();
+      clearTimeout(this._cameraSettleTimer);
+      this._cameraSettleTimer = setTimeout(() => this._finishCameraMotion(), 120);
+    }
+
+    _animateCameraTo(targetCam, { duration = 650, zoomInput = false } = {}) {
       this._cameraTarget = targetCam;
+      this._cameraTargetIsZoom = zoomInput;
       if (
         !this._cameraViewportRect &&
         this.svg &&
@@ -9940,10 +11177,9 @@
       }
       const from = { ...this.camera };
       const t0 = performance.now();
-      const duration = 650;
       if (this.flyRaf) cancelAnimationFrame(this.flyRaf);
       const step = (now) => {
-        const k = Math.min(1, (now - t0) / duration);
+        const k = Math.max(0, Math.min(1, (now - t0) / duration));
         const ease = 1 - Math.pow(1 - k, 3);
         const w = from.w + (targetCam.w - from.w) * ease;
         const h = from.h + (targetCam.h - from.h) * ease;
@@ -9960,6 +11196,7 @@
         } else {
           this.flyRaf = null;
           this._cameraTarget = null;
+          this._cameraTargetIsZoom = false;
           if (this.activePerson) this._invalidateTypographyLayout();
           this._applyCamera(true);
         }
@@ -10000,7 +11237,8 @@
         const aspect = this._getViewportAspect();
         const w = Math.max(320, Math.min(this.camera.w, 480));
         const h = w * aspect;
-        const isDesktop = typeof window === 'undefined' || window.innerWidth > 900;
+        // Embeds keep the place/person card at the top right like desktop, not as a bottom sheet.
+        const isDesktop = typeof window === 'undefined' || window.innerWidth > 900 || Boolean(this.embed);
         const xFrac = isDesktop ? 0.38 : 0.5;
         const yFrac = isDesktop ? 0.44 : 0.3;
         this._animateCameraTo({ x: tx - w * xFrac, y: ty - h * yFrac, w, h });
@@ -10163,23 +11401,28 @@
     }
 
     zoomBy(factor, clientX, clientY, animate = true) {
+      if (!Number.isFinite(factor) || factor <= 0) return;
       this._recordGestureMove();
+      // Repeated key presses accumulate against the pending zoom destination.
+      // A navigation flight is interrupted from its current visible camera.
+      const cam = (animate && this._cameraTargetIsZoom && this._cameraTarget) || this.camera;
       const [mx, my] =
         clientX !== undefined && clientY !== undefined
-          ? this._clientToSvgPoint(clientX, clientY)
-          : [this.camera.x + this.camera.w * 0.5, this.camera.y + this.camera.h * 0.5];
-      const nextW = Math.max(100, Math.min(1300, this.camera.w / factor));
-      const k = nextW / this.camera.w;
+          ? this._clientToSvgPoint(clientX, clientY, cam)
+          : [cam.x + cam.w * 0.5, cam.y + cam.h * 0.5];
+      const nextW = Math.max(100, Math.min(1300, cam.w / factor));
+      const k = nextW / cam.w;
       const targetCam = {
-        x: mx - (mx - this.camera.x) * k,
-        y: my - (my - this.camera.y) * k,
+        x: mx - (mx - cam.x) * k,
+        y: my - (my - cam.y) * k,
         w: nextW,
-        h: this.camera.h * k,
+        h: cam.h * k,
         zoom: 1000 / nextW,
       };
       if (animate && typeof this._animateCameraTo === 'function') {
-        this._animateCameraTo(targetCam);
+        this._animateCameraTo(targetCam, { duration: 120, zoomInput: true });
       } else {
+        this._cancelCameraAnimation();
         this.camera = targetCam;
         this._applyCamera();
       }
@@ -10203,19 +11446,19 @@
       });
     }
 
-    _clientToSvgPoint(clientX, clientY) {
+    _clientToSvgPoint(clientX, clientY, cam = this.camera) {
       const rect =
         (this.dragState && this.dragState.rect) ||
         (this.pinchState && this.pinchState.rect) ||
         this._cameraViewportRect ||
         this._getUnscaledSvgRect();
       if (rect && rect.width) this._cameraViewportRect = rect;
-      const scale = Math.min(rect.width / this.camera.w, rect.height / this.camera.h);
-      const padX = (rect.width - this.camera.w * scale) * 0.5;
-      const padY = (rect.height - this.camera.h * scale) * 0.5;
+      const scale = Math.min(rect.width / cam.w, rect.height / cam.h);
+      const padX = (rect.width - cam.w * scale) * 0.5;
+      const padY = (rect.height - cam.h * scale) * 0.5;
       return [
-        this.camera.x + (clientX - rect.left - padX) / scale,
-        this.camera.y + (clientY - rect.top - padY) / scale,
+        cam.x + (clientX - rect.left - padX) / scale,
+        cam.y + (clientY - rect.top - padY) / scale,
       ];
     }
 
@@ -10335,7 +11578,7 @@
         applyDim(g);
         this._svgNode(
           'path',
-          { d: 'M-3.5 -2.45L2.75 0L-3.5 2.45L-1.85 0Z', class: 'journey-chevron' },
+          { d: 'M-4.5 -3.15L3.55 0L-4.5 3.15L-2.3 0Z', class: 'journey-chevron' },
           g
         );
       };
@@ -10408,20 +11651,20 @@
     _searchPlaceholder(expanded = false) {
       if (this.locale === 'en') {
         return expanded
-          ? 'Search figure (or pair: Li Bai, Du Fu) / city / era'
-          : 'Search figure / pair / city / era';
+          ? 'Search figure (or 2–3: Li Bai, Du Fu, Gao Shi) / city / era'
+          : 'Search figure / multi-person / city / era';
       }
       return this._zh(
         expanded
-          ? '搜人物（可搜双人：李白 杜甫）/ 古今地名 / 年号'
-          : '搜人物 / 双人 / 古今地名 / 年号'
+          ? '搜人物（可搜双人/三人：李白 杜甫 高适）/ 古今地名 / 年号'
+          : '搜人物 / 多人同看 / 古今地名 / 年号'
       );
     }
 
     _getSearchSampleQueries() {
       return this.locale === 'en'
-        ? ["Chang'an", 'Chibi', 'Cao Cao', 'Li Bai, Du Fu']
-        : ['长安', '赤壁', '霍去病', '李白 杜甫'].map((s) => this._zh(s));
+        ? ["Chang'an", 'Chibi', 'Cao Cao', 'Li Bai, Du Fu, Gao Shi']
+        : ['长安', '赤壁', '霍去病', '李白 杜甫 高适'].map((s) => this._zh(s));
     }
 
     _getSearchShowcasePool() {
@@ -10431,13 +11674,15 @@
         'sushi',
         ['libai', 'dufu'],
         'zhugeliang',
-        ['yanghu', 'duyu'],
+        ['libai', 'dufu', 'gaoshi'],
         'huoqubing',
-        ['zuti', 'liukun'],
+        ['caocao', 'liubei', 'sunquan'],
         'libai',
+        ['yanghu', 'duyu'],
         'caocao',
         ['zhugeliang', 'simayi'],
         'xinqiji',
+        ['zuti', 'liukun'],
         'xuanzang',
         'wangyangming',
         'zhangqian',
@@ -10489,6 +11734,48 @@
       }
       if (this.searchIndex) return this.searchIndex;
       const entries = [];
+      const compiledEraSpans = this._getCompiledEraSpans();
+      const DYN_ALIASES_MAP = {
+        zhanguo: ['战国七雄', '春秋战国'],
+        qin: ['秦朝', '大秦', '秦'],
+        xihan: ['汉', '汉朝', '前汉', '两汉'],
+        donghan: ['汉', '汉朝', '两汉'],
+        sanguo: ['魏蜀吴'],
+        xijin: ['晋', '晋朝', '两晋'],
+        dongjin: ['东晋', '晋', '晋朝', '两晋', '十六国', '五胡十六国'],
+        nanbei: ['南朝', '北朝', '六朝'],
+        sui: ['隋朝', '大隋', '隋'],
+        tang: ['唐朝', '大唐', '李唐', '唐'],
+        wudai: ['五代', '十国'],
+        beisong: ['宋', '宋朝', '两宋', '大宋', '赵宋'],
+        nansong: ['宋', '宋朝', '两宋', '大宋', '赵宋'],
+        yuan: ['元朝', '大元', '蒙元', '元'],
+        ming: ['明朝', '大明', '朱明', '明'],
+        qing: ['清朝', '大清', '满清', '清'],
+        roc: ['民国', '国民政府', '北洋政府'],
+        prc: ['中国', '现代', '当代', '新中国'],
+      };
+      const extractCoreRegimes = (zhTitle, titles = []) => {
+        const out = new Set();
+        const addFrom = (s) => {
+          const bare = String(s || '').replace(/[（(][^）)]*[）)]/g, '').trim();
+          if (!bare) return;
+          if (bare.length === 1 && CORE_REGIME_CHARS.has(bare)) out.add(bare);
+          if (bare.endsWith('国') && bare.length === 2 && CORE_REGIME_CHARS.has(bare[0])) {
+            out.add(bare[0]);
+          }
+          const stripped = bare.replace(
+            /^(?:东|西|南|北|前|后|大|成|蜀|季|刘|曹|孙|杨|马|冉|谯|胡|桓|武|明|古|韩)/,
+            ''
+          );
+          if (stripped.length === 1 && CORE_REGIME_CHARS.has(stripped)) {
+            out.add(stripped);
+          }
+        };
+        addFrom(zhTitle);
+        for (const t of titles) addFrom(t);
+        return [...out];
+      };
 
       // 0a. Historical Figures Chronicle Index (点人溯事)
       for (const p of HistoricalAtlasController.PERSON_PROFILES) {
@@ -10498,6 +11785,20 @@
           this.dynasties[0];
         const evCount = this._collectPersonEvents(p).length;
         const aliases = this._personSearchAliases(p);
+        const eraNames = [];
+        if (!p.isRelic) {
+          const pText = `${p.zh} ${p.courtesyZh || ''} ${aliases.join(' ')}`;
+          for (const c of compiledEraSpans) {
+            if (
+              c.monarchZh &&
+              c.monarchZh.length >= 2 &&
+              (pText.includes(c.monarchZh) ||
+                (c.shortMonarch && c.shortMonarch.length >= 3 && pText.includes(c.shortMonarch)))
+            ) {
+              if (c.eraOnly && c.eraOnly.length >= 2) eraNames.push(c.eraOnly);
+            }
+          }
+        }
         const briefCourtesyZh = (p.courtesyZh || d.title).split(/\s*·\s*/)[0];
         const rawFirstEn = (p.courtesyEn || d.title).split(/\s*(?:·|,)\s*/)[0];
         const briefCourtesyEn = rawFirstEn.length <= 14 ? rawFirstEn : '';
@@ -10518,7 +11819,7 @@
             : briefCourtesyEn
               ? `${briefCourtesyEn} · ${evCount} events`
               : `${evCount} chronicle events`,
-          keywords: `${p.zh} ${p.en} ${p.courtesyZh || ''} ${p.courtesyEn || ''} ${aliases.join(' ')} ${p.isRelic ? '国器 宝物 传国玉玺 传国玺 玉玺 和氏璧 relic seal' : '人物 生平 事迹 行迹'}`.toLowerCase(),
+          keywords: `${p.zh} ${p.en} ${p.courtesyZh || ''} ${p.courtesyEn || ''} ${aliases.join(' ')} ${eraNames.join(' ')} ${p.isRelic ? '国器 宝物 传国玉玺 传国玺 玉玺 和氏璧 relic seal' : '人物 生平 事迹 行迹'}`.toLowerCase(),
         });
       }
 
@@ -10539,6 +11840,8 @@
         const enDyn = (this.enLocale.dynasties && this.enLocale.dynasties[d.key]) || {};
         const nameEn = enDyn.name || d.title;
         const shortEn = enDyn.short || d.badge || d.title;
+        const dAliases = (DYN_ALIASES_MAP[d.key] || []).map((a) => a.toLowerCase());
+        const coreRegimes = extractCoreRegimes(d.title, dAliases);
         const spanZh =
           d.key === 'prc'
             ? `${d.fromYear}—`
@@ -10555,7 +11858,9 @@
           subZh: `${spanZh} · 都城：${d.seat}`,
           titleEn: nameEn,
           subEn: `${spanEn} · ${enDyn.capital || d.seat}`,
-          keywords: `${d.title} ${d.badge || ''} ${d.seat || ''} ${nameEn} ${shortEn}`.toLowerCase(),
+          aliases: dAliases,
+          coreRegimes,
+          keywords: `${d.title} ${d.badge || ''} ${d.seat || ''} ${nameEn} ${shortEn} ${dAliases.join(' ')}`.toLowerCase(),
         });
       }
 
@@ -10563,7 +11868,26 @@
       const yrZh = (y) => (y <= 0 ? `前${-y}` : `${y}`);
       const yrEn = (y) => (y <= 0 ? `${-y} BCE` : `${y} CE`);
       for (const p of HistoricalAtlasController.POLITY_PROFILES) {
-        const aliases = [...(p.aliases || []), ...p.titles.filter((t) => t.length >= 2)];
+        const bareZhPol = p.zh.replace(/[（(][^）)]*[）)]/g, '').trim().toLowerCase();
+        const bareTitles = p.titles
+          .map((t) => t.replace(/[（(][^）)]*[）)]/g, '').trim().toLowerCase())
+          .filter(Boolean);
+        const exactPolityTitles = [
+          ...new Set([bareZhPol, ...p.titles.map((t) => t.toLowerCase()), ...bareTitles]),
+        ].filter(Boolean);
+        const aliases = [
+          ...new Set([...(p.aliases || []).map((a) => a.toLowerCase()), ...exactPolityTitles]),
+        ];
+        const coreRegimes = extractCoreRegimes(p.zh, p.titles);
+        const rulersText = this._polityRulers({ ...p, curated: true }) || '';
+        const founderExtra =
+          p.key === 'caowei'
+            ? '曹操 魏武帝'
+            : p.key === 'shuhan'
+              ? '刘备 诸葛亮'
+              : p.key === 'sunwu'
+                ? '孙权 孙策'
+                : '';
         entries.push({
           kind: 'polity',
           polityKey: p.key,
@@ -10573,8 +11897,12 @@
           subZh: `${yrZh(p.from)}—${yrZh(p.to)} · 都城：${p.seatZh}`,
           titleEn: p.en,
           subEn: `${yrEn(p.from)} – ${yrEn(p.to)} · ${p.seatEn}`,
-          aliases: aliases.map((a) => a.toLowerCase()),
-          keywords: `${p.zh} ${p.en} ${aliases.join(' ')}`.toLowerCase(),
+          exactPolityTitles,
+          coreRegimes,
+          politySpan: Math.max(1, (p.to || 0) - (p.from || 0)),
+          polityFrom: p.from || 0,
+          aliases,
+          keywords: `${p.zh} ${p.en} ${aliases.join(' ')} ${p.seatZh || ''} ${p.seatEn || ''} ${rulersText} ${p.rulersEn || ''} ${founderExtra}`.toLowerCase(),
         });
       }
 
@@ -10863,8 +12191,12 @@
         const enDynShort = (enDynObj.short || enDynObj.name || dForSpan.key || '').toLowerCase();
         const enDynBase = enDynShort.replace(/^[wens]\.\s*/, '');
         const enSearchTarget = `${monarchEnLower} ${monarchEnExpanded} ${monarchEnExpanded} of ${enDynShort} ${monarchEnExpanded} of ${enDynBase} ${monarchBare} of ${enDynBase}`;
+        const monarchPfx =
+          ERA_DYNASTY_PREFIXES.find((dp) => monarchZh.startsWith(dp)) || dynPfx;
         const monarchTitleLen =
-          dynPfx && monarchZh.startsWith(dynPfx) ? monarchZh.length - dynPfx.length : monarchZh.length;
+          monarchPfx && monarchZh.startsWith(monarchPfx)
+            ? monarchZh.length - monarchPfx.length
+            : monarchZh.length;
         const [enName, enOwnRegime = ''] = monarchEnExpanded.split(' of ');
         const enRegimePool = `${enOwnRegime} | ${enDynShort} | ${enDynBase}`;
         const eraPinyinLower =
@@ -10945,6 +12277,15 @@
       const isLatinQuery = qLower.length >= 3 && /[a-z]/i.test(qLower);
       const qFoldEra = isLatinQuery ? qLower.replace(/['’‘`\-_.\s]+/g, '') : '';
       const yearNum = numMatch ? this._parseChineseNumber(numMatch[2]) : null;
+      if (
+        !directYrMatch &&
+        yearNum === null &&
+        !isYuanNian &&
+        !/[年载]$/.test(trimmed) &&
+        prefixQ.length < 2
+      ) {
+        return hits;
+      }
       const seenMonarchOnly = new Set();
       const seenEraHit = new Set();
       // A hit must reach past the regime name into the era or monarch title, so a bare
@@ -11059,6 +12400,23 @@
       return hits;
     }
 
+    _searchBucket(item) {
+      if (item.kind === 'dynasty' || item.kind === 'polity') return 'regime';
+      if (item.kind === 'multi_person' || item.kind === 'person' || item.kind === 'era') {
+        return 'person_era';
+      }
+      if (
+        item.kind === 'city' ||
+        item.kind === 'pass' ||
+        item.kind === 'gazetteer' ||
+        item.kind === 'prefecture' ||
+        item.kind === 'region'
+      ) {
+        return 'geo';
+      }
+      return 'event';
+    }
+
     _queryQuickSearch(rawQuery) {
       const rawTrim = rawQuery.trim();
       if (!rawTrim) return [];
@@ -11090,18 +12448,26 @@
         const mEn = iq ? iq.mEn : (item.modernEn || '').toLowerCase();
         const tEnFold = isAscii ? (iq ? iq.tEnFold : fold(tEn)) : '';
         const mEnFold = isAscii ? (iq ? iq.mEnFold : fold(mEn)) : '';
-        if (tZh === q || tEn === q) score = 100;
-        else if (bareZh && (bareZh === q || bareEn === q)) score = 99;
-        else if (isAscii && qFold.length >= 3 && tEnFold === qFold) score = 98;
-        else if (
+        if (tZh === q || tEn === q) {
+          score = item.kind === 'dynasty' ? 108 : item.kind === 'polity' ? 104 : 100;
+        } else if (bareZh && (bareZh === q || bareEn === q)) {
+          score = item.kind === 'dynasty' ? 106 : item.kind === 'polity' ? 101 : 99;
+        } else if (isAscii && qFold.length >= 3 && tEnFold === qFold) {
+          score = 98;
+        } else if (
           mZh &&
           (mZh === q ||
             (iq ? iq.mZhParts && iq.mZhParts.includes(q) : mZh.split(/[·/、]/).includes(q)) ||
             mEn === q)
         ) {
           score = 96;
-        } else if (isAscii && qFold.length >= 3 && mEnFold === qFold) score = 94;
-        else if (
+        } else if (isAscii && qFold.length >= 3 && mEnFold === qFold) {
+          score = 94;
+        } else if (item.exactPolityTitles && item.exactPolityTitles.includes(q)) {
+          score = 100;
+        } else if (item.coreRegimes && item.coreRegimes.includes(q)) {
+          score = item.kind === 'dynasty' ? 105 : 97;
+        } else if (
           item.aliases &&
           item.aliases.some(
             (a, idx) =>
@@ -11111,19 +12477,31 @@
                 (iq && iq.aliasesFold ? iq.aliasesFold[idx] : fold(a)) === qFold)
           )
         ) {
-          score = 92;
+          score = item.kind === 'dynasty' ? 103 : item.kind === 'polity' ? 95 : 92;
         } else if (
           tZh.startsWith(q) ||
           tEn.startsWith(q) ||
           (isAscii && qFold.length >= 3 && tEnFold.startsWith(qFold))
         ) {
-          score = item.kind === 'event' ? (hasEraMatch ? 81 : 93) : 80;
+          if (item.kind === 'event') {
+            score = q.length === 1 ? 66 : hasEraMatch ? 78 : 88;
+          } else if (item.kind === 'dynasty' || item.kind === 'polity') {
+            score = 88;
+          } else if (
+            (item.kind === 'prefecture' || item.kind === 'region') &&
+            tZh.length === q.length + 1 &&
+            /[州郡国府路道省县]$/.test(tZh)
+          ) {
+            score = 84;
+          } else {
+            score = 80;
+          }
         } else if (
           item.kind === 'event' &&
           q.length >= 2 &&
           (tZh.includes(q) || (isAscii && qFold.length >= 4 && tEnFold.includes(qFold)))
         ) {
-          score = 81;
+          score = 78;
         } else if (
           item.kind === 'event' &&
           q.length >= 2 &&
@@ -11138,7 +12516,7 @@
                 ? (iq.altEnPairs.find((pair) => pair[1].includes(qFold)) || [])[0] || null
                 : item.altTitlesEn.find((at) => fold(at).includes(qFold)))))
         ) {
-          score = 75;
+          score = 74;
         } else if (
           mZh &&
           (mZh.startsWith(q) ||
@@ -11152,10 +12530,13 @@
             qFold.length >= 4 &&
             (iq ? iq.keywordsFold : fold(item.keywords)).includes(qFold))
         ) {
-          if (hasEraMatch && (item.kind === 'city' || item.kind === 'event')) {
+          if (
+            (hasEraMatch && (item.kind === 'city' || item.kind === 'event')) ||
+            (q.length === 1 && item.kind !== 'person')
+          ) {
             score = 0;
           } else {
-            score = 55;
+            score = item.kind === 'dynasty' ? 58 : 55;
             matchedByKeywordOnly = true;
           }
         }
@@ -11185,10 +12566,15 @@
           }
           if (resItem.kind === 'person') {
             if (score >= 92) score = 148;
-            else if (score >= 80) score = 114;
+            else if (score >= 80) score = q.length === 1 || CORE_REGIME_CHARS.has(q) ? 86 : 114;
             else score = 72;
+          } else if (resItem.kind === 'dynasty' || resItem.kind === 'polity') {
+            if (resItem.dynasty === this.dynasties[this.dynastyIdx]) score += 4;
+            if (resItem.politySpan >= 18) score += 1;
+          } else if (resItem.kind === 'event') {
+            if (resItem.dynasty === this.dynasties[this.dynastyIdx]) score += 4;
           } else {
-            if (resItem.dynasty === this.dynasties[this.dynastyIdx]) score += 12;
+            if (resItem.dynasty === this.dynasties[this.dynastyIdx]) score += 10;
             if (resItem.isCapital) score += 2;
           }
           results.push({ ...resItem, score });
@@ -11200,7 +12586,11 @@
         !results.some((r) => r.kind === 'person') &&
         !results.some(
           (r) =>
-            (r.kind === 'city' || r.kind === 'pass' || r.kind === 'gazetteer' || r.kind === 'dynasty') &&
+            (r.kind === 'city' ||
+              r.kind === 'pass' ||
+              r.kind === 'gazetteer' ||
+              r.kind === 'dynasty' ||
+              r.kind === 'polity') &&
             r.score >= 92
         ) &&
         /^[\u4e00-\u9fa5]{2,5}$/.test(normQ)
@@ -11253,17 +12643,44 @@
         }
       }
 
-      results.sort((a, b) => b.score - a.score);
+      results.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        if (a.polityFrom !== undefined && b.polityFrom !== undefined) {
+          return a.polityFrom - b.polityFrom;
+        }
+        return 0;
+      });
+
       const deduped = [];
-      const seenPlaceKey = new Set();
+      const seenAdminTitle = new Map();
       for (const item of results) {
-        if (
-          (item.kind === 'city' || item.kind === 'prefecture' || item.kind === 'region') &&
-          item.coord
-        ) {
-          const pk = `${item.kind}:${item.titleZh}:${Math.round(item.coord[0])},${Math.round(item.coord[1])}`;
-          if (seenPlaceKey.has(pk)) continue;
-          seenPlaceKey.add(pk);
+        if (item.kind === 'prefecture' || item.kind === 'region') {
+          const ak = item.titleZh;
+          if (seenAdminTitle.has(ak)) {
+            const prev = seenAdminTitle.get(ak);
+            if (item.dynasty && prev.dynasty && item.dynasty.title !== prev.dynasty.title) {
+              const dLabel = item.dynasty.badge || item.dynasty.title;
+              if (!prev._mergedDynasties.includes(dLabel)) prev._mergedDynasties.push(dLabel);
+            }
+            continue;
+          }
+          const copy = {
+            ...item,
+            _mergedDynasties: item.dynasty ? [item.dynasty.badge || item.dynasty.title] : [],
+          };
+          seenAdminTitle.set(ak, copy);
+          deduped.push(copy);
+          continue;
+        }
+        if (item.kind === 'city' && item.coord) {
+          const dupCity = deduped.some(
+            (prev) =>
+              prev.kind === 'city' &&
+              prev.titleZh === item.titleZh &&
+              prev.coord &&
+              this.projector.greatCircleKm(prev.coord, item.coord) <= 120
+          );
+          if (dupCity) continue;
         } else if (item.kind === 'event') {
           const evYr = item.rawYear !== undefined ? item.rawYear : item.year;
           const dupEv = deduped.some(
@@ -11277,9 +12694,90 @@
           if (dupEv) continue;
         }
         deduped.push(item);
-        if (deduped.length >= 12) break;
       }
-      return deduped;
+
+      for (const item of deduped) {
+        if (item._mergedDynasties && item._mergedDynasties.length > 1 && !item.subZh) {
+          const dyns = item._mergedDynasties.slice(0, 4).join('、');
+          item.subZh = `历${dyns}`;
+        }
+        item.bucket = this._searchBucket(item);
+      }
+
+      if (!deduped.length) return [];
+
+      const buckets = {
+        regime: [],
+        person_era: [],
+        geo: [],
+        event: [],
+      };
+      for (const item of deduped) {
+        buckets[item.bucket].push(item);
+      }
+      const hasOtherBuckets =
+        buckets.regime.length + buckets.person_era.length + buckets.event.length > 0;
+      if (hasOtherBuckets && buckets.geo.length > 3) {
+        let adminCount = 0;
+        buckets.geo = buckets.geo.filter((g) => {
+          if (g.kind === 'prefecture' || g.kind === 'region') {
+            adminCount++;
+            return adminCount <= 2;
+          }
+          return true;
+        });
+      }
+
+      const topBucket = deduped[0].bucket;
+      const defaultOrder = ['regime', 'person_era', 'geo', 'event'];
+      const bucketOrder = [topBucket, ...defaultOrder.filter((b) => b !== topBucket)];
+
+      const baseQuotas = {
+        regime: buckets.regime[0] && buckets.regime[0].score < 70 ? 2 : 5,
+        person_era: 3,
+        geo: buckets.geo[0] && buckets.geo[0].score < 70 ? 2 : 3,
+        event: 2,
+      };
+      if (topBucket !== 'regime') {
+        baseQuotas[topBucket] = Math.max(baseQuotas[topBucket], 4);
+      }
+
+      const pickedByBucket = { regime: [], person_era: [], geo: [], event: [] };
+      const overflowByBucket = { regime: [], person_era: [], geo: [], event: [] };
+      let totalPicked = 0;
+
+      for (const b of bucketOrder) {
+        const list = buckets[b];
+        const qLimit = baseQuotas[b];
+        for (let i = 0; i < list.length; i++) {
+          if (i < qLimit && totalPicked < 12) {
+            pickedByBucket[b].push(list[i]);
+            totalPicked++;
+          } else {
+            overflowByBucket[b].push(list[i]);
+          }
+        }
+      }
+
+      if (totalPicked < 12) {
+        for (const minScore of [70, 0]) {
+          for (const b of bucketOrder) {
+            for (const item of overflowByBucket[b]) {
+              if (totalPicked >= 12) break;
+              if (item._picked || item.score < minScore) continue;
+              item._picked = true;
+              pickedByBucket[b].push(item);
+              totalPicked++;
+            }
+          }
+        }
+      }
+
+      const finalResults = [];
+      for (const b of bucketOrder) {
+        finalResults.push(...pickedByBucket[b]);
+      }
+      return finalResults.slice(0, 12);
     }
 
     _selectSearchResult(item) {
@@ -11317,7 +12815,8 @@
           this._id('chk-settlements').checked = true;
           this.grpSettlements.classList.remove('is-hidden');
         }
-        const isDesktop = typeof window === 'undefined' || window.innerWidth > 900;
+        // Embeds keep the place/person card at the top right like desktop, not as a bottom sheet.
+        const isDesktop = typeof window === 'undefined' || window.innerWidth > 900 || Boolean(this.embed);
         const minCityZoom = isDesktop ? 2.4 : 3.25;
         const rawZoom = item.zoom || (item.kind === 'pass' ? 2.35 : item.tier === 2 ? 2.4 : 1.85);
         const targetZoom =
@@ -11584,6 +13083,10 @@
         currentResults.forEach((item, idx) => {
           const li = document.createElement('li');
           if (idx === activeSearchIdx) li.classList.add('is-active');
+          const prevBucket = idx > 0 ? currentResults[idx - 1].bucket : null;
+          if (idx > 0 && item.bucket && prevBucket && item.bucket !== prevBucket) {
+            li.classList.add('is-group-start');
+          }
           const mainText = this.locale === 'en' ? item.titleEn : this._zh(item.titleZh);
           const subText = this.locale === 'en' ? item.subEn : this._zh(item.subZh);
           const tagText =
@@ -11592,9 +13095,10 @@
                 ? 'Warring–5 Dyn · Relic'
                 : this._zh('战国—五代 · 国器')
               : `${this.dynastyBadge(item.dynasty)} · ${this._zh(kindLabel[item.kind] || '')}`;
+          const bucketAttr = item.bucket ? ` data-bucket="${escHtml(item.bucket)}"` : '';
           li.innerHTML =
             `<div><span class="sr-main">${escHtml(mainText)}</span>${subText ? `<span class="sr-sub">${escHtml(subText)}</span>` : ''}</div>` +
-            `<span class="sr-tag">${escHtml(tagText)}</span>`;
+            `<span class="sr-tag"${bucketAttr}>${escHtml(tagText)}</span>`;
           let itemPicked = false;
           const pickItem = (e) => {
             e.preventDefault();
@@ -11743,6 +13247,8 @@
       this._id('chk-settlements').addEventListener('change', (e) => {
         if (this.challenge) return;
         this.grpSettlements.classList.toggle('is-hidden', !e.target.checked);
+        const cur = this.dynasties[this.dynastyIdx];
+        if (cur) this._updateMilestoneStates(cur);
         this._rescaleSvgTypography();
       });
       this._id('chk-corridors').addEventListener('change', (e) => {
@@ -12052,12 +13558,17 @@
             return;
           }
           e.preventDefault();
-          this._recordGestureMove();
-          const [mx, my] = this._clientToSvgPoint(e.clientX, e.clientY);
           const rawDelta =
             e.deltaMode === 1 ? e.deltaY * 18 : e.deltaMode === 2 ? e.deltaY * 240 : e.deltaY;
-          const clampedDelta = Math.max(-220, Math.min(220, rawDelta || 0));
-          const factor = Math.exp(-clampedDelta * 0.002);
+          if (!Number.isFinite(rawDelta) || rawDelta === 0) return;
+          this._cancelCameraAnimation();
+          this._recordGestureMove();
+          const [mx, my] = this._clientToSvgPoint(e.clientX, e.clientY);
+          // Trackpad pinch is encoded as ctrl+wheel with deltaY = -100*log(scale).
+          // Decode pinch directly; ordinary wheel/two-finger scrolling retains
+          // its existing sensitivity and per-event limit.
+          const delta = e.ctrlKey ? rawDelta : Math.max(-220, Math.min(220, rawDelta));
+          const factor = Math.exp(-delta * (e.ctrlKey ? 0.01 : 0.002));
           const nextW = Math.max(100, Math.min(1300, this.camera.w / factor));
           const k = nextW / this.camera.w;
           this.camera = {
@@ -12086,6 +13597,7 @@
 
       this.svg.addEventListener('pointerdown', (e) => {
         if (e.pointerType === 'mouse' && e.button !== 0) return;
+        this._cancelCameraAnimation();
         this._cancelPendingHover();
         this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         this.svg.setPointerCapture(e.pointerId);
@@ -12236,9 +13748,13 @@
         const milestoneEl = findClosest('.milestone-pin');
         const cur = this.dynasties[this.dynastyIdx];
         const mHit = milestoneEl && cur ? this._resolvePinMilestone(cur, milestoneEl) : null;
+        const mHitCoord =
+          milestoneEl && milestoneEl.dataset.lng !== undefined && milestoneEl.dataset.lat !== undefined
+            ? [Number(milestoneEl.dataset.lng), Number(milestoneEl.dataset.lat)]
+            : mHit && mHit.coord;
         const coCity =
-          !settlementEl && mHit && mHit.coord
-            ? this._findCoLocatedSettlement(cur, mHit.coord[0], mHit.coord[1], 28)
+          !settlementEl && mHitCoord
+            ? this._findCoLocatedSettlement(cur, mHitCoord[0], mHitCoord[1], 28)
             : null;
 
         if (journeyNodeEl && this.activeCustomRoute) {
@@ -12298,10 +13814,13 @@
           }
         } else if (milestoneEl && !settlementNameEl && mHit) {
           const eraPart = this.locale === 'en' ? '' : ` · ${this._eventEraLabel(cur, mHit)}`;
+          const pinSiteIdx =
+            milestoneEl.dataset.siteIdx !== undefined ? Number(milestoneEl.dataset.siteIdx) : -1;
           const alreadyOpen =
             this.activeMilestone &&
             this.activeMilestone.dynastyKey === cur.key &&
             this.activeMilestone.milestone === mHit &&
+            (pinSiteIdx < 0 || this.activeMilestone.siteIdx === pinSiteIdx) &&
             !this.milestoneBalloon.classList.contains('is-hidden');
           const hasCity = Boolean(settlementEl || coCity);
           const actionHint = alreadyOpen
@@ -12564,12 +14083,31 @@
           }
           const cur = this.dynasties[this.dynastyIdx];
 
-          // Clicking the city name text (e.g. "长安"), the onboarding whisper tag, or a city dot without an overlapping event pin -> trace place history
+          // Clicking the city name text (e.g. "长安"), the onboarding whisper tag, or a city dot without an overlapping unopened event pin -> trace place history
+          const milestoneAlreadyAnchored =
+            Boolean(milestoneEl && cur) &&
+            (() => {
+              const pm = this._resolvePinMilestone(cur, milestoneEl);
+              const pmIdx = pm ? (cur.milestones || []).indexOf(pm) : -1;
+              const pmSite =
+                milestoneEl.dataset.siteIdx !== undefined
+                  ? Number(milestoneEl.dataset.siteIdx)
+                  : undefined;
+              return Boolean(
+                this.activeMilestone &&
+                  this.activeMilestone.dynastyKey === cur.key &&
+                  this.activeMilestone.idx === pmIdx &&
+                  (pmSite === undefined || this.activeMilestone.siteIdx === pmSite) &&
+                  !this.milestoneBalloon.classList.contains('is-hidden')
+              );
+            })();
           if (
             settlementEl &&
             settlementEl.dataset.lng &&
             settlementEl.dataset.lat &&
-            (settlementNameEl || !milestoneEl || settlementEl.classList.contains('has-trace-hint'))
+            (settlementNameEl ||
+              !milestoneEl ||
+              (settlementEl.classList.contains('has-trace-hint') && milestoneAlreadyAnchored))
           ) {
             this.openGenealogyAt(Number(settlementEl.dataset.lng), Number(settlementEl.dataset.lat));
             return;
@@ -12580,14 +14118,21 @@
             const m = this._resolvePinMilestone(cur, milestoneEl);
             const mIdx = m ? (cur.milestones || []).indexOf(m) : -1;
             if (m && m.coord) {
+              const pinSiteIdx =
+                milestoneEl.dataset.siteIdx !== undefined ? Number(milestoneEl.dataset.siteIdx) : undefined;
+              const pinCoord =
+                milestoneEl.dataset.lng !== undefined && milestoneEl.dataset.lat !== undefined
+                  ? [Number(milestoneEl.dataset.lng), Number(milestoneEl.dataset.lat)]
+                  : m.coord;
               const coCity = settlementEl
                 ? { coord: [Number(settlementEl.dataset.lng), Number(settlementEl.dataset.lat)] }
-                : this._findCoLocatedSettlement(cur, m.coord[0], m.coord[1], 28);
-              const targetCoord = coCity ? coCity.coord : m.coord;
+                : this._findCoLocatedSettlement(cur, pinCoord[0], pinCoord[1], 28);
+              const targetCoord = coCity ? coCity.coord : pinCoord;
               const alreadyOpen =
                 this.activeMilestone &&
                 this.activeMilestone.dynastyKey === cur.key &&
                 this.activeMilestone.idx === mIdx &&
+                (pinSiteIdx === undefined || this.activeMilestone.siteIdx === pinSiteIdx) &&
                 !this.milestoneBalloon.classList.contains('is-hidden');
               if (alreadyOpen) {
                 this.openGenealogyAt(targetCoord[0], targetCoord[1]);
@@ -12595,8 +14140,8 @@
               }
               this.stopAutoplay();
               this.jumpToYear(this._clampYearToDynasty(cur, m.year));
-              this.openMilestoneBalloon(cur, m);
-              this._panToward(m.coord[0], m.coord[1]);
+              this.openMilestoneBalloon(cur, m, { isAuto: false, siteIdx: pinSiteIdx });
+              this._panToward(pinCoord[0], pinCoord[1]);
               if (
                 window.innerWidth > 900 &&
                 !this._id('genealogy-card').classList.contains('is-hidden')
@@ -13645,7 +15190,8 @@
       const cx = (minX + maxX) * 0.5;
       const cy = (minY + maxY) * 0.5;
       const aspect = this._getViewportAspect();
-      const isDesktop = typeof window === 'undefined' || window.innerWidth > 900;
+      // Embeds keep the place/person card at the top right like desktop, not as a bottom sheet.
+      const isDesktop = typeof window === 'undefined' || window.innerWidth > 900 || Boolean(this.embed);
       const hasZoom =
         explicitZoom !== undefined &&
         explicitZoom !== null &&
@@ -13813,6 +15359,8 @@
       if (placeTokens.length >= 2) {
         const route = [];
         let totalKm = 0;
+        const isMultiTrack = placeTokens.some((t) => (t.trackIdx || 0) > 0);
+        const trackCounters = {};
         for (let i = 0; i < placeTokens.length; i++) {
           const tok = placeTokens[i];
           const r = this.resolvePlace(tok.place, tok.year);
@@ -13823,13 +15371,18 @@
           const sSnap = this.snapshots[sSnapKey] || snap;
           const info = this._inspectCoord(r.lng, r.lat, sd, sSnap, tok.year);
           const prev = route.length ? route[route.length - 1] : null;
-          const segKm = prev
-            ? Math.round(this.projector.greatCircleKm(prev.coord, [r.lng, r.lat]))
-            : 0;
+          const tId = tok.trackIdx || 0;
+          const prevTrackId = prev && prev.trackIdx !== undefined ? prev.trackIdx : 0;
+          const segKm =
+            prev && prevTrackId === tId
+              ? Math.round(this.projector.greatCircleKm(prev.coord, [r.lng, r.lat]))
+              : 0;
           totalKm += segKm;
+          trackCounters[tId] = (trackCounters[tId] || 0) + 1;
           const cleanPlace = /[<>]/.test(String(tok.place || '')) ? r.name : tok.place;
           route.push({
             step: route.length + 1,
+            ...(isMultiTrack ? { trackIdx: tId, trackStep: trackCounters[tId] } : {}),
             year: tok.year,
             era: this.formatEraLabel(tok.year, sd, [r.lng, r.lat]),
             dynasty: isEn ? this.dynastyName(sd) : this._zh(sd.title),
@@ -13844,9 +15397,21 @@
         if (route.length >= 2) {
           const first = route[0];
           const isMultiYear = new Set(route.map((s) => s.year)).size > 1;
+          const formattedPlace = isMultiTrack
+            ? Object.values(
+                route.reduce((acc, s) => {
+                  const k = s.trackIdx || 0;
+                  if (!acc[k]) acc[k] = [];
+                  acc[k].push(s.place);
+                  return acc;
+                }, {})
+              )
+                .map((arr) => arr.join(','))
+                .join(';')
+            : route.map((s) => s.place).join(',');
           const params = new URLSearchParams();
           params.set('year', isMultiYear ? route.map((s) => s.year).join(',') : String(first.year));
-          params.set('place', route.map((s) => s.place).join(','));
+          params.set('place', formattedPlace);
           if (isEn) params.set('lang', 'en');
           else if (this.locale === 'zh-tw') params.set('lang', 'zh-tw');
           const basePath =
@@ -13861,7 +15426,7 @@
               seat: isEn ? this.dynastySeat(d) : this._zh(d.seat),
               span: [d.fromYear, d.toYear],
             },
-            place: route.map((s) => s.place).join(','),
+            place: formattedPlace,
             coord: first.coord,
             zoom: Number(this.camera.zoom.toFixed(2)),
             polity: first.polity,
@@ -14063,7 +15628,8 @@
         const w = 1000 / z;
         const h = w * this._getViewportAspect();
         const [tx, ty] = this.projector.toScreen(targetLng, targetLat);
-        const isDesktop = typeof window === 'undefined' || window.innerWidth > 900;
+        // Embeds keep the place/person card at the top right like desktop, not as a bottom sheet.
+        const isDesktop = typeof window === 'undefined' || window.innerWidth > 900 || Boolean(this.embed);
         const xFrac = isDesktop ? 0.36 : 0.5;
         const yFrac = isDesktop ? 0.48 : 0.21;
         this.camera = { x: tx - w * xFrac, y: ty - h * yFrac, w, h, zoom: z };
@@ -14106,6 +15672,16 @@
 
     _restoreFromQuery() {
       const q = new URLSearchParams(location.search);
+      if (
+        q.has('year') ||
+        q.has('place') ||
+        (q.has('lng') && q.has('lat')) ||
+        q.has('person') ||
+        q.has('journey')
+      ) {
+        this.lastRenderedSnap = null;
+        if (this.grpGhostDiff) this.grpGhostDiff.innerHTML = '';
+      }
       const needsEn =
         this.locale === 'en' ||
         /[a-z]/i.test(
@@ -14150,17 +15726,22 @@
           zoom: q.has('zoom') ? Number(q.get('zoom')) : undefined,
         });
       } else {
+        let traceParts = null;
+        if (q.has('trace')) {
+          const parts = (q.get('trace') || '').split(',').map(Number);
+          if (parts.length === 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1])) {
+            traceParts = parts;
+            this.activeTrace = [parts[0], parts[1]];
+          }
+        }
         if (q.has('year')) {
           const yList = this._parseYearList(q.get('year'));
           if (yList.length) this.jumpToYear(yList[0]);
         }
-        if (q.has('trace')) {
-          const parts = (q.get('trace') || '').split(',').map(Number);
-          if (parts.length === 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1])) {
-            afterFullSnapshots(() => {
-              this.openGenealogyAt(parts[0], parts[1]);
-            }, 80);
-          }
+        if (traceParts) {
+          afterFullSnapshots(() => {
+            this.openGenealogyAt(traceParts[0], traceParts[1]);
+          }, 80);
         }
         if (q.has('zoom') || q.has('center')) {
           const z = Math.max(1, Math.min(8, Number(q.get('zoom')) || this.camera.zoom));
@@ -14365,7 +15946,7 @@
               place: {
                 type: 'string',
                 description:
-                  'Single canonical ancient/modern place name or comma-separated route stops in Chinese, English, or Pinyin.',
+                  'Single canonical ancient/modern place name, comma-separated route stops, or semicolon-separated converging routes (e.g. "许昌,江陵,赤壁;柴桑,樊口,赤壁") in Chinese, English, or Pinyin.',
               },
               zoom: {
                 type: 'number',
@@ -14403,11 +15984,13 @@
               },
               place: {
                 type: 'string',
-                description: 'Optional ancient/modern place name or comma-separated route stops.',
+                description:
+                  'Optional ancient/modern place name, comma-separated route stops, or semicolon-separated converging routes (e.g. "许昌,江陵,赤壁;柴桑,樊口,赤壁").',
               },
               person: {
                 type: 'string',
-                description: 'Optional historical figure name or key (e.g. sushi, libai, zhugeliang).',
+                description:
+                  'Optional single historical figure or comma-separated 2–4 figures (e.g. "libai,dufu,gaoshi" or "caocao,liubei,sunquan").',
               },
               stop: {
                 type: 'integer',
@@ -14435,13 +16018,14 @@
         {
           name: 'jiangshan_open_person',
           description:
-            'Open the spatio-temporal life & poetry chronicle (点人溯事) on the map for a Chinese historical figure or monarch and return their geocoded life stops.',
+            'Open the spatio-temporal life & poetry chronicle (点人溯事) on the map for 1–4 Chinese historical figures or monarchs and return their geocoded life stops and shared historical encounters.',
           inputSchema: {
             type: 'object',
             properties: {
               person: {
                 type: 'string',
-                description: 'Historical figure name or key in Chinese, English, or Pinyin.',
+                description:
+                  'Single historical figure or comma-separated 2–4 figures (e.g. "libai,dufu,gaoshi" or "李白,杜甫,高适") in Chinese, English, or Pinyin.',
               },
               stop: {
                 type: 'integer',

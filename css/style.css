@@ -77,13 +77,18 @@ h2 {
 
 .brand-group h1 {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
+  font-size: 1rem;
+  line-height: 1;
   letter-spacing: 0.02em;
   white-space: nowrap;
 }
 
 .brand-group .home-link {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
   color: inherit;
   text-decoration: none;
 }
@@ -401,7 +406,6 @@ h2 {
   height: 100%;
   transform-origin: 0 0;
   contain: layout style;
-  will-change: transform;
 }
 
 #atlas-svg {
@@ -447,8 +451,13 @@ h2 {
   opacity: 0 !important;
 }
 
-#atlas-svg.is-camera-moving .prefecture-shape {
+#atlas-svg.is-camera-moving .prefecture-shape,
+#atlas-svg.is-camera-moving .province-shape {
   pointer-events: none;
+}
+
+#atlas-svg.is-camera-moving .province-boundary-casing {
+  display: none;
 }
 
 /* Suspend GPU backdrop-filter sampling over 88-97% opaque parchment cards
@@ -597,7 +606,23 @@ h2 {
   stroke-width: 2px;
 }
 
-.hydro-label.is-range.is-crowded-hidden {
+/* Zoom-gated boundary rivers share the river ink but stay one step quieter. */
+.hydro-label.is-detail-hydro {
+  font-size: 6.2px;
+  letter-spacing: 0.08em;
+}
+
+/* The Gobi is an area, not a line: sand-brown ink with very wide tracking and a soft halo. */
+.hydro-label.is-desert {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 1.1em;
+  fill: rgba(96, 70, 36, 0.82);
+  stroke: rgba(250, 245, 234, 0.75);
+  stroke-width: 1.8px;
+}
+
+.hydro-label.is-crowded-hidden {
   display: none;
 }
 
@@ -645,12 +670,12 @@ h2 {
   fill: var(--province-fill);
   stroke: none;
   vector-effect: non-scaling-stroke;
-  transition: fill 0.2s;
 }
 
 #atlas-svg.terrain-active .province-shape:not(.maritime-dash) {
-  fill: rgba(246, 239, 225, 0.04);
+  fill: none;
   stroke: none;
+  pointer-events: fill;
 }
 
 #atlas-svg[data-dynasty="prc"] .province-shape:not(.maritime-dash) {
@@ -673,29 +698,29 @@ h2 {
   fill: none;
   stroke: rgba(250, 245, 234, 0.58);
   stroke-width: 2.1;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  stroke-linecap: butt;
+  stroke-linejoin: bevel;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
 
 .province-boundary-interior {
   fill: none;
-  stroke: rgba(84, 70, 54, 0.62);
+  stroke: #847766;
   stroke-width: 0.94;
-  stroke-dasharray: 4.5 2.2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  stroke-dasharray: 5.2 1.8;
+  stroke-linecap: butt;
+  stroke-linejoin: bevel;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
 
 .province-boundary-outer {
   fill: none;
-  stroke: rgba(74, 60, 46, 0.58);
+  stroke: #85796a;
   stroke-width: 0.98;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  stroke-linecap: butt;
+  stroke-linejoin: bevel;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
@@ -706,13 +731,13 @@ h2 {
 }
 
 #atlas-svg.terrain-active .province-boundary-interior {
-  stroke: rgba(70, 56, 42, 0.68);
+  stroke: #716556;
   stroke-width: 0.96;
-  stroke-dasharray: 4.5 2.2;
+  stroke-dasharray: 5.2 1.8;
 }
 
 #atlas-svg.terrain-active .province-boundary-outer {
-  stroke: rgba(64, 50, 38, 0.62);
+  stroke: #76695b;
   stroke-width: 1.02;
 }
 
@@ -724,14 +749,14 @@ h2 {
 
 #atlas-svg[data-dynasty="prc"] .province-boundary-interior,
 #atlas-svg.terrain-active[data-dynasty="prc"] .province-boundary-interior {
-  stroke: rgba(104, 28, 12, 0.88);
+  stroke: #732b1b;
   stroke-width: 1.42;
   stroke-dasharray: 7 3;
 }
 
 #atlas-svg[data-dynasty="prc"] .province-boundary-outer,
 #atlas-svg.terrain-active[data-dynasty="prc"] .province-boundary-outer {
-  stroke: rgba(158, 42, 43, 0.9);
+  stroke: #a43535;
   stroke-width: 1.85;
   stroke-dasharray: none;
 }
@@ -1048,6 +1073,12 @@ h2 {
   cursor: pointer;
 }
 
+.milestone-pin .ev-hit {
+  fill: transparent;
+  stroke: none;
+  pointer-events: all;
+}
+
 .milestone-pin .ev-ring {
   fill: var(--vermilion);
   fill-opacity: 0;
@@ -1060,26 +1091,42 @@ h2 {
 .milestone-pin .ev-core {
   fill: #fff6e8;
   stroke: var(--vermilion);
-  stroke-width: 1.3;
+  stroke-width: 1.15;
   vector-effect: non-scaling-stroke;
-  transition: fill 0.2s, opacity 0.2s;
+  transition: fill 0.2s, opacity 0.2s, transform 0.2s;
 }
 
-.milestone-pin.is-future {
+.milestone-pin.is-future,
+.milestone-pin.is-past-occluded:not(.is-active),
+.milestone-pin.is-secondary-pin:not(.is-current):not(.is-active) {
   display: none;
   pointer-events: none;
 }
 
 .milestone-pin.is-past .ev-core {
-  opacity: 0.75;
+  opacity: 0.72;
+  transform: scale(0.82);
 }
 
 .milestone-pin.is-current .ev-core,
-.milestone-pin:hover .ev-core,
 .milestone-pin.is-active .ev-core {
   fill: var(--vermilion);
   stroke: #fff6e8;
   opacity: 1;
+  transform: scale(1);
+}
+
+@media (hover: hover) {
+  .milestone-pin:hover .ev-core {
+    fill: var(--vermilion);
+    stroke: #fff6e8;
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.milestone-pin.is-anchor-pin.is-current .ev-core {
+  stroke-width: 1.45;
 }
 
 .milestone-pin.is-current .ev-ring {
@@ -1196,10 +1243,23 @@ h2 {
   transition: background 0.14s, color 0.14s, border-color 0.14s;
 }
 
-#milestone-balloon .ep-place:hover {
-  background: rgba(181, 69, 47, 0.16);
-  color: var(--vermilion);
-  border-color: rgba(181, 69, 47, 0.45);
+#milestone-balloon .ep-places {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+#milestone-balloon .ep-place:active {
+  transform: scale(0.97);
+}
+
+@media (hover: hover) {
+  #milestone-balloon .ep-place:hover {
+    background: rgba(181, 69, 47, 0.16);
+    color: var(--vermilion);
+    border-color: rgba(181, 69, 47, 0.45);
+  }
 }
 
 #milestone-balloon .ep-relic-seal {
@@ -1873,6 +1933,14 @@ h2 {
   transition: background 0.1s;
 }
 
+.search-results-list li.is-group-start {
+  border-top: 1px dashed var(--hairline);
+  margin-top: 2px;
+  padding-top: 7px;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
 .search-results-list li:hover,
 .search-results-list li.is-active {
   background: rgba(181, 69, 47, 0.11);
@@ -1909,6 +1977,26 @@ h2 {
   color: var(--vermilion);
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+.sr-tag[data-bucket='regime'] {
+  background: rgba(181, 69, 47, 0.13);
+  color: #a63a25;
+}
+
+.sr-tag[data-bucket='person_era'] {
+  background: rgba(140, 90, 43, 0.13);
+  color: #7c4d1e;
+}
+
+.sr-tag[data-bucket='geo'] {
+  background: rgba(58, 95, 111, 0.12);
+  color: #2f5464;
+}
+
+.sr-tag[data-bucket='event'] {
+  background: rgba(93, 85, 76, 0.12);
+  color: #544c43;
 }
 
 .sr-eg-pill {
@@ -2567,15 +2655,34 @@ h2 {
 
 /* Bottom Scrubber Timeline */
 #scrubber-dock {
+  --scrubber-surface: rgba(235, 228, 214, 0.9);
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
   padding: 12px 20px 16px;
   border-top: 1px solid var(--hairline);
-  background: rgba(235, 228, 214, 0.9);
+  background: var(--scrubber-surface);
   backdrop-filter: blur(6px);
   transition: opacity 0.2s ease;
+}
+
+/* Keep the frosted surface separate from the changing timeline content. */
+#scrubber-dock.is-autoplaying {
+  position: relative;
+  isolation: isolate;
+  background: transparent;
+  backdrop-filter: none;
+}
+
+#scrubber-dock.is-autoplaying::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--scrubber-surface);
+  backdrop-filter: blur(6px);
 }
 
 #scrubber-dock.is-challenge-locked {
@@ -2662,6 +2769,7 @@ h2 {
 #scrubber-Bubble {
   position: absolute;
   top: 0;
+  left: 0;
   transform: translateX(-50%);
   background: var(--text-main);
   color: #f8f3e8;
@@ -2749,13 +2857,25 @@ h2 {
   filter: saturate(1.1);
 }
 
+.band-cell.is-compact {
+  font-size: 10.5px;
+  letter-spacing: -0.02em;
+}
+
 .band-cell.is-narrow {
   color: transparent;
   text-shadow: none;
 }
 
+#scrubber-motion {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
 #scrubber-handle {
   position: absolute;
+  left: 0;
   top: -6px;
   bottom: -6px;
   width: 4px;
@@ -2764,6 +2884,21 @@ h2 {
   border-radius: 2px;
   box-shadow: 0 0 0 2px rgba(243, 238, 228, 0.9);
   pointer-events: none;
+}
+
+/* Year text and input changes stay on small surfaces while playback is active.
+   Release these promotion hints when playback stops. */
+#scrubber-dock.is-autoplaying #scrubber-rail-wrap,
+#scrubber-dock.is-autoplaying #scrubber-Bubble,
+#scrubber-dock.is-autoplaying .year-stepper {
+  will-change: transform;
+}
+
+/* Autoplay jumps between event nodes; the thumb glides so a 75-year hop reads as time passing.
+   Manual scrubbing keeps the instant follow. */
+#scrubber-dock.is-autoplaying #scrubber-motion {
+  will-change: transform;
+  transition: transform 0.22s ease-out;
 }
 
 #scrubber-ticks {
@@ -2889,6 +3024,11 @@ html[lang="en"] .band-cell {
   letter-spacing: -0.01em;
 }
 
+html[lang="en"] .band-cell.is-compact {
+  font-size: 9.5px;
+  letter-spacing: -0.03em;
+}
+
 html[lang="en"] #milestone-list li {
   grid-template-columns: 78px 1fr;
 }
@@ -2900,7 +3040,7 @@ html[lang="en"] .genealogy-list li {
 @media (max-width: 900px) {
   #nav-bar {
     gap: 8px;
-    padding: 8px 10px;
+    padding: 4px 10px;
   }
   .brand-group .seal-mark {
     font-size: 22px;
@@ -3108,7 +3248,7 @@ html[lang="en"] .genealogy-list li {
 
 @media (max-width: 640px) {
   #nav-bar {
-    padding: 6px 7px;
+    padding: 3.5px 7px;
     gap: 4px;
   }
   .brand-group .seal-mark {
@@ -3128,8 +3268,9 @@ html[lang="en"] .genealogy-list li {
     display: none !important;
   }
   .action-btn {
-    padding: 4px 6.5px;
+    padding: 3.5px 6.5px;
     font-size: 11px;
+    line-height: 1.15;
     gap: 2.5px;
   }
   .action-btn .btn-svg {
@@ -3192,7 +3333,7 @@ html[lang="en"] .genealogy-list li {
     grid-template-rows: 50px auto;
     row-gap: 7px;
     column-gap: 6px;
-    padding: 8px 10px calc(9px + env(safe-area-inset-bottom, 0px));
+    padding: 6px 10px calc(7px + env(safe-area-inset-bottom, 0px));
   }
   .playback-controls-group {
     grid-column: 1;
@@ -3248,7 +3389,7 @@ html[lang="en"] .genealogy-list li {
     margin: 0 auto;
     transform: none !important;
     font-size: 10.8px;
-    padding: 3px 8px;
+    padding: 2.5px 8px;
     border-radius: 999px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -3678,36 +3819,36 @@ html[lang="en"] #act-toggle-pane .tp-label {
 }
 
 .journey-track-halo {
-  stroke: rgba(251, 247, 238, 0.84);
-  stroke-width: 3.6px;
+  stroke: rgba(252, 248, 240, 0.94);
+  stroke-width: 5.2px;
 }
 
 .journey-track-halo.is-focus {
-  stroke: rgba(253, 249, 241, 0.92);
-  stroke-width: 4.6px;
+  stroke: rgba(253, 249, 241, 0.97);
+  stroke-width: 6.4px;
 }
 
 .journey-track-thread {
-  stroke-width: 1.85px;
-  stroke-dasharray: 6.5 4;
-  opacity: 0.9;
+  stroke-width: 2.55px;
+  stroke-dasharray: 8 3.8;
+  opacity: 0.96;
 }
 
 .journey-track-upcoming {
-  stroke: rgba(146, 78, 62, 0.5);
-  stroke-width: 1.3px;
-  stroke-dasharray: 2.2 4.2;
+  stroke: rgba(146, 78, 62, 0.62);
+  stroke-width: 1.75px;
+  stroke-dasharray: 2.8 4.2;
 }
 
 .journey-track-passed {
-  stroke-width: 1.5px;
-  stroke-dasharray: 5.8 3.8;
-  opacity: 0.7;
+  stroke-width: 2.15px;
+  stroke-dasharray: 6.8 3.8;
+  opacity: 0.86;
 }
 
 .journey-track-focus {
-  stroke-width: 2.35px;
-  opacity: 0.97;
+  stroke-width: 3.15px;
+  opacity: 0.99;
 }
 
 .journey-dir-mark {
@@ -3716,20 +3857,20 @@ html[lang="en"] #act-toggle-pane .tp-label {
 
 .journey-chevron {
   fill: currentColor;
-  stroke: rgba(252, 248, 240, 0.94);
-  stroke-width: 0.9px;
+  stroke: rgba(252, 248, 240, 0.96);
+  stroke-width: 1.25px;
   paint-order: stroke fill;
   stroke-linecap: round;
   stroke-linejoin: round;
-  opacity: 0.9;
+  opacity: 0.96;
 }
 
 .journey-dir-mark.is-muted .journey-chevron {
-  opacity: 0.58;
+  opacity: 0.72;
 }
 
 .journey-dir-mark.is-focus .journey-chevron {
-  transform: scale(1.22);
+  transform: scale(1.26);
   opacity: 1;
 }
 
@@ -4145,7 +4286,7 @@ html[lang="en"] #act-toggle-pane .tp-label {
   }
 
   #workspace-body:not(.is-mobile-chronicle-open) #chronicle-pane {
-    padding: 6px 12px 7px;
+    padding: 5px 12px;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -4207,34 +4348,7 @@ html[lang="en"] #act-toggle-pane .tp-label {
     flex-shrink: 0;
   }
 
-  #workspace-body:not(.is-mobile-chronicle-open) #chronicle-pane .seat-row {
-    order: 3;
-    flex: 0 0 100%;
-    width: 100%;
-    min-width: 0;
-    margin-top: 0;
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-    font-size: 11.5px;
-    white-space: normal;
-    overflow: visible;
-  }
-
-  #workspace-body:not(.is-mobile-chronicle-open) #chronicle-pane .seat-tag {
-    flex-shrink: 0;
-    white-space: nowrap;
-    font-size: 10.5px;
-    padding: 1px 6px;
-  }
-
-  #workspace-body:not(.is-mobile-chronicle-open) #chronicle-pane #dynasty-seat {
-    flex: 1 1 auto;
-    min-width: 0;
-    line-height: 1.35;
-    overflow-wrap: anywhere;
-  }
-
+  #workspace-body:not(.is-mobile-chronicle-open) #chronicle-pane .seat-row,
   #workspace-body:not(.is-mobile-chronicle-open) #chronicle-pane #dynasty-summary,
   #workspace-body:not(.is-mobile-chronicle-open) #chronicle-pane .milestone-section,
   #workspace-body:not(.is-mobile-chronicle-open) #chronicle-pane .polity-backbar,
@@ -4533,6 +4647,21 @@ html[lang="en"] #act-toggle-pane .tp-label {
     font-size: 11.2px;
   }
 
+  #milestone-balloon .ep-places {
+    gap: 3px;
+  }
+
+  #milestone-balloon .ep-places .ep-place {
+    padding: 2.5px 6.5px;
+    font-size: 10.6px;
+    gap: 2px;
+  }
+
+  #milestone-balloon .ep-relic-seal {
+    padding: 2px 6px 2px 3px;
+    font-size: 10.5px;
+  }
+
   #milestone-balloon .ep-close {
     top: 5px;
     right: 6px;
@@ -4718,9 +4847,11 @@ html[lang="en"] #act-toggle-pane .tp-label {
 
   /* Boost UI surface contrast on mobile chrome */
   #nav-bar,
-  #scrubber-dock,
   #chronicle-pane {
     background: rgba(243, 238, 228, 0.96);
+  }
+  #scrubber-dock {
+    --scrubber-surface: rgba(243, 238, 228, 0.96);
   }
 }
 
@@ -4912,9 +5043,9 @@ html[lang="en"] .genealogy-list li.person-ev-row {
 .journey-node.is-multi-bead .jn-disc.is-waypoint-bead {
   fill: currentColor;
   stroke: #fffaf2;
-  stroke-width: 2px;
+  stroke-width: 2.2px;
   paint-order: stroke fill;
-  opacity: 0.9;
+  opacity: 0.96;
   transition: transform 0.14s ease, opacity 0.14s ease;
 }
 
@@ -5120,4 +5251,223 @@ html[lang="en"] .genealogy-list li.person-ev-row {
 
 .cr-stop-pill.is-converge {
   box-shadow: 0 0 0 1.4px rgba(189, 45, 34, 0.42);
+}
+
+/* ---------------- Embed mode (?embed=1) ----------------
+   Only applies inside an iframe embed; the main site never gets the is-embed class. */
+html.is-embed,
+html.is-embed body {
+  height: 100%;
+  overflow: hidden;
+}
+
+html.is-embed #atlas-shell {
+  grid-template-rows: 0 minmax(0, 1fr) auto;
+}
+
+html.is-embed #nav-bar {
+  height: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+}
+
+html.is-embed #workspace-body {
+  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+}
+
+html.is-embed #viewport-frame {
+  border-right: 0;
+}
+
+html.is-embed #chronicle-pane,
+html.is-embed #map-search-box,
+html.is-embed #start-guide,
+html.is-embed #gesture-guide,
+html.is-embed #challenge-card,
+html.is-embed #act-play-speed,
+html.is-embed #seo-atlas-directory,
+html.is-embed #seo-static-topics-section {
+  display: none !important;
+}
+
+/* Compact legend: just the polity chips. */
+html.is-embed #map-key > :not(.key-polities-grid) {
+  display: none !important;
+}
+
+html.is-embed #map-key {
+  padding: 6px 10px;
+}
+
+/* Leave room under the open-link chip for the place / person card. All four edges are set because
+   the <=900px layout turns the card into a full-width bottom sheet, and embeds are often that narrow. */
+html.is-embed #genealogy-card,
+html.is-embed #genealogy-card.is-sheet-expanded {
+  top: 52px;
+  right: 12px;
+  bottom: auto;
+  left: auto;
+  width: min(320px, calc(100% - 24px));
+  max-height: calc(100% - 66px);
+  /* Above the click-to-interact shield, so the card is usable before the map is activated. */
+  z-index: 30;
+}
+
+html.is-embed #scrubber-dock {
+  padding: 8px 12px 10px;
+  gap: 10px;
+}
+
+html.is-embed.is-embed-locked #scrubber-dock {
+  display: none;
+}
+
+.embed-chip {
+  position: absolute;
+  top: 12px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(50% - 24px);
+  padding: 6px 11px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: rgba(246, 241, 231, 0.95);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  font-size: 13px;
+  line-height: 1.2;
+  color: var(--text-main);
+  white-space: nowrap;
+}
+
+#embed-badge {
+  left: 12px;
+}
+
+#embed-badge .embed-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#embed-badge .embed-seal {
+  font-family: var(--serif-stack);
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--vermilion);
+}
+
+#embed-badge .embed-sep {
+  width: 1px;
+  height: 13px;
+  background: var(--hairline);
+  flex-shrink: 0;
+}
+
+#embed-open {
+  right: 12px;
+  color: var(--vermilion);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+#embed-open:hover,
+#embed-open:focus-visible {
+  background: #fff;
+  outline: none;
+}
+
+#embed-disclaimer {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  z-index: 40;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(246, 241, 231, 0.8);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Click-to-interact shield: transparent, sits above the map but below the chips and cards. */
+#embed-shield {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+#embed-shield.is-hidden {
+  display: none;
+}
+
+#embed-shield .embed-shield-hint {
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(40, 30, 20, 0.72);
+  color: #fff;
+  font-size: 13px;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.15s, transform 0.15s;
+  pointer-events: none;
+}
+
+#embed-shield:hover,
+#embed-shield:focus-visible {
+  background: rgba(40, 30, 20, 0.06);
+  outline: none;
+}
+
+#embed-shield:hover .embed-shield-hint,
+#embed-shield:focus-visible .embed-shield-hint {
+  opacity: 1;
+  transform: none;
+}
+
+@media (hover: none) {
+  /* Touch devices cannot hover, so keep the hint visible. */
+  #embed-shield .embed-shield-hint {
+    opacity: 0.85;
+    transform: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .embed-chip {
+    font-size: 11.5px;
+    padding: 5px 9px;
+  }
+
+  /* Phone-width embeds: the open link shrinks to an icon so it can stay top right beside the badge. */
+  #embed-badge {
+    max-width: calc(100% - 68px);
+  }
+
+  #embed-open {
+    font-size: 0;
+    padding: 5px 10px;
+  }
+
+  #embed-open::after {
+    content: '↗';
+    font-size: 14px;
+  }
+
+  /* Leave part of the map visible under the card. */
+  html.is-embed #genealogy-card,
+  html.is-embed #genealogy-card.is-sheet-expanded {
+    max-height: 55%;
+  }
 }
