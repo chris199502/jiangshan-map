@@ -631,6 +631,16 @@ function main() {
     assert(audioSize > 100000, `Self-hosted Guqin audio file ${gt.mp3} is unexpectedly small (${audioSize} bytes)`);
   }
 
+  // 6c. Prefecture and first-level region lines are clipped to the snapshot's own polities (#234),
+  // so a second coastline or a commandery drawn in lost territory never shows.
+  assert(
+    indexHtml.includes('<clipPath id="prefecture-clip" clipPathUnits="userSpaceOnUse"><path id="prefecture-clip-path" /></clipPath>') &&
+      appCode.includes("shapesGroup.setAttribute('clip-path', 'url(#prefecture-clip)')") &&
+      appCode.includes("{ 'clip-path': 'url(#prefecture-clip)' }") &&
+      appCode.includes("clipPath.setAttribute('d', ownPaths.join(''))"),
+    'index.html & app.js must clip the prefecture layer and region lines to #prefecture-clip (the non-neighbor polities)'
+  );
+
   // 7. Validate PR #7 (pass icon), PR #8 (balloon caret & bookmark toggle tab), and PR #10 (SEO metadata & sitemap)
   const styleCss = fs.readFileSync(path.join(ROOT, 'css', 'style.css'), 'utf8');
   assert(
@@ -2165,6 +2175,44 @@ function main() {
     ctrl.camera = prevCam;
   }
 
+  // The event balloon must not cover the event city's own name (e.g. 长安, 徐州).
+  {
+    const proto = Object.getPrototypeOf(ctrl);
+    const viewport = { left: 0, top: 0, width: 1000, height: 700 };
+    let nameBox = { left: 506, right: 546, top: 292, bottom: 308, width: 40, height: 16 };
+    const city = {
+      dataset: { x: '502', y: '297' },
+      classList: { contains: () => false },
+      querySelector: () => (nameBox ? { getBoundingClientRect: () => nameBox } : null),
+    };
+    const place = () => {
+      const probe = Object.assign(Object.create(proto), {
+        activeMilestone: { anchorCoord: [108.94, 34.27], milestone: {} },
+        projector: { toScreen: () => [500, 300] },
+        camera: { x: 0, y: 0, w: 1000, h: 700 },
+        svg: { classList: { contains: () => false }, querySelectorAll: () => [city] },
+        milestoneBalloon: { classList: { add() {}, remove() {} }, dataset: {}, style: { setProperty() {} }, querySelector: () => null },
+        _milestoneBalloonSize: { w: 260, h: 62 },
+        _id: () => null,
+      });
+      proto._positionMilestoneBalloon.call(probe, viewport);
+      return probe.milestoneBalloon;
+    };
+    // Name right of the pin: the default right-hand balloon would cover it.
+    let b = place();
+    let left = parseFloat(b.style.left), top = parseFloat(b.style.top);
+    assert(
+      left >= nameBox.right || left + 260 <= nameBox.left || top >= nameBox.bottom || top + 62 <= nameBox.top,
+      `Event balloon must not cover the event city's name, got caret=${b.dataset.caret} at ${left},${top}`
+    );
+    // Name left of the pin: the right-hand default stays.
+    nameBox = { left: 454, right: 494, top: 292, bottom: 308, width: 40, height: 16 };
+    assert.strictEqual(place().dataset.caret, 'left', 'Balloon keeps the right-hand default when the name is elsewhere');
+    // No visible name: the right-hand default stays.
+    nameBox = null;
+    assert.strictEqual(place().dataset.caret, 'left', 'Balloon keeps the right-hand default without a city name');
+  }
+
   // CUJ 19: Complete Region/Prefecture Hydration & Transition Era Snapshots (Chu-Han, Gengshi/Chimei, Huang Chao & Late Tang Warlords)
   for (const [sk, snap] of Object.entries(snapshots)) {
     if (!snap || Array.isArray(snap) || sk === 's_prc') continue;
@@ -3126,7 +3174,35 @@ function main() {
     );
   }
   const tangSnapKeys = Object.keys(snapshots).filter((k) => k.startsWith('s_tang'));
-  assert(tangSnapKeys.length === 20, `Expected 20 s_tang* snapshots, found ${tangSnapKeys.length}`);
+  assert(tangSnapKeys.length === 22, `Expected 22 s_tang* snapshots, found ${tangSnapKeys.length}`);
+  // Issue #267. Tang northeast: 平壤 is 安东's seat until 676, never 新罗's before 702;
+  // 震国 (698–713) is renamed 渤海 only from 713; 安西 / 北庭 hold oases, not the desert, in 764–790.
+  {
+    const pol = (sk, title) => (snapshots[sk].polities || []).find((p) => p.title === title);
+    const pyongyang = [125.75, 39.02];
+    const dunhua = [128.2, 43.37];
+    assert(pointInShape(...pyongyang, pol('s_tang_a4', '安东都护府').shape), 's_tang_a4: 平壤 must be inside 安东都护府');
+    for (const sk of ['s_tang_a4', 's_tang_a', 's_tang_wz1', 's_tang_wz1b']) {
+      assert(!pointInShape(...pyongyang, pol(sk, '新罗').shape), `${sk}: 平壤 must not be inside 新罗`);
+    }
+    for (const sk of ['s_tang_a', 's_tang_wz1', 's_tang_wz1b']) {
+      assert(!pointInShape(...pyongyang, pol(sk, '安东都护府').shape), `${sk}: 安东都护府 must have left 平壤 (676)`);
+    }
+    for (const sk of ['s_tang_wz1b', 's_tang_wz2', 's_tang_a5z']) {
+      const zhen = pol(sk, '震国');
+      assert(zhen && !pol(sk, '渤海') && pointInShape(...dunhua, zhen.shape), `${sk}: 敦化 must be inside 震国, not 渤海`);
+    }
+    assert(!pointInShape(...dunhua, pol('s_tang_wz1b', '安东都护府').shape), 's_tang_wz1b: 敦化 must not be inside 安东都护府');
+    assert(pol('s_tang_a5', '渤海') && !pol('s_tang_a5', '震国'), 's_tang_a5 (713–755) must show 渤海');
+    const anxi = pol('s_tang_b1', '安西都护府（孤悬坚守）').shape;
+    const beiting = pol('s_tang_b1', '北庭都护府（孤悬坚守）').shape;
+    for (const [name, pt] of [['龟兹', [82.96, 41.72]], ['于阗', [79.93, 37.11]], ['疏勒', [75.99, 39.47]], ['西州', [89.18, 42.95]]]) {
+      assert(pointInShape(...pt, anxi), `s_tang_b1: ${name} must be inside 安西都护府`);
+    }
+    assert(pointInShape(89.18, 44.0, beiting), 's_tang_b1: 北庭 must be inside 北庭都护府');
+    assert(!pointInShape(81.3, 43.9, beiting), 's_tang_b1: 伊犁 (lost to the Karluks in 766) must not be inside 北庭都护府');
+    assert(pointInShape(79.4, 35.6, pol('s_tang_b1', '吐蕃').shape), 's_tang_b1: the Kunlun strip must belong to 吐蕃');
+  }
   const unifiedTuboSnapKeys = tangSnapKeys.filter((k) => k !== 's_tang_d1' && k !== 's_tang_d2');
   for (const sk of unifiedTuboSnapKeys) {
     const tuboPol = (snapshots[sk].polities || []).find((p) => p.title === '吐蕃');
@@ -4365,6 +4441,15 @@ function main() {
       );
     }
 
+    // 沙州 (issue #267): Gaochang Commandery (327 CE) and the 西域长史 at Haitou (Loulan) belong
+    // to 前凉 from 329 CE until 376 CE, and no other polity of those snapshots covers them.
+    for (const sk of ['s_dongjin_a', 's_dongjin_a2', 's_dongjin_350', 's_dongjin_351', 's_dongjin_b', 's_dongjin_b2']) {
+      for (const [name, x, y] of [['高昌', 89.53, 42.85], ['楼兰', 89.84, 40.52]]) {
+        const holders = snapshots[sk].polities.filter((p) => p.shape && pointInShape(x, y, p.shape)).map((p) => p.title);
+        assert(holders.length === 1 && holders[0] === '前凉', `${sk}: ${name} must be inside 前凉 only, found ${holders.join('+')}`);
+      }
+    }
+
     // 350 CE (s_dongjin_350) & 351 CE (s_dongjin_351) must show 冉魏, while 351 CE adds 前秦 in Guanzhong and keeps 前燕 in Liaodong
     assert(
       snapshots.s_dongjin_350.polities.some((p) => p.title === '冉魏') &&
@@ -4738,13 +4823,13 @@ function main() {
       assert(findSt(tangDyn, w), `tang: must include warlord settlement ${w}`);
     }
 
-    // Tang 21 map change milestones
-    const expectedTangMapChanges = [618, 621, 630, 635, 640, 648, 657, 668, 676, 690, 702, 705, 755, 757, 763, 764, 790, 848, 881, 885, 907];
+    // Tang 23 map change milestones
+    const expectedTangMapChanges = [618, 621, 630, 635, 640, 648, 657, 668, 676, 690, 698, 702, 705, 713, 755, 757, 763, 764, 790, 848, 881, 885, 907];
     const actualTangMapChanges = (tangDyn.milestones || []).filter((m) => m.isMapChange).map((m) => m.year);
     assert.strictEqual(
       JSON.stringify(actualTangMapChanges),
       JSON.stringify(expectedTangMapChanges),
-      'tang: 21 map change milestone years must match'
+      'tang: 23 map change milestone years must match'
     );
 
     // Spatial checks: s_sui_d and s_tang_0 warlords
@@ -7817,14 +7902,16 @@ function main() {
         }
       }
 
-      // CUJ 42: Mobile Layout & Single-Row Collapsed Chronicle Bar Non-Occlusion Invariants
+      // CUJ 42: Mobile Layout, Single-Row Collapsed Chronicle Bar & iOS Search Input Auto-Zoom Prevention
       assert(
         !cssSrc.includes('grid-template-rows: 1fr 40px') &&
           cssSrc.includes('grid-template-rows: 1fr auto') &&
           cssSrc.includes('#workspace-body:not(.is-mobile-chronicle-open) #chronicle-pane .seat-row') &&
           cssSrc.includes('#workspace-body.is-mobile-chronicle-open #chronicle-pane #dynasty-seat') &&
-          cssSrc.includes('#viewport-frame:has(#milestone-balloon:not(.is-hidden)) .settlement-node .cap-hint-tag'),
-        'css/style.css must use single-row collapsed mobile chronicle bar (hiding .seat-row until expanded) and hide .cap-hint-tag when #milestone-balloon is active'
+          cssSrc.includes('#viewport-frame:has(#milestone-balloon:not(.is-hidden)) .settlement-node .cap-hint-tag') &&
+          cssSrc.includes('#inp-map-search,\n  #inp-year {\n    font-size: 16px;') &&
+          appCode.includes('if (!this._isMobileViewport()) searchInp.focus();'),
+        'css/style.css & js/app.js must use single-row collapsed mobile chronicle bar, prevent iOS Safari auto-zoom (#inp-map-search font-size: 16px), and avoid synchronous searchInp.focus() on mobile chip clicks'
       );
 
       // CUJ 43: Wu Zhou (武周, 690–705) Interregnum Snapshots, Shendu Luoyang Capital & Polity Profile
@@ -7837,10 +7924,12 @@ function main() {
         );
         assert.strictEqual(ctrl._resolveSnapKey(tangDyn, 689), 's_tang_a');
         assert.strictEqual(ctrl._resolveSnapKey(tangDyn, 690), 's_tang_wz1');
-        assert.strictEqual(ctrl._resolveSnapKey(tangDyn, 700), 's_tang_wz1');
+        assert.strictEqual(ctrl._resolveSnapKey(tangDyn, 697), 's_tang_wz1');
+        assert.strictEqual(ctrl._resolveSnapKey(tangDyn, 700), 's_tang_wz1b');
         assert.strictEqual(ctrl._resolveSnapKey(tangDyn, 702), 's_tang_wz2');
         assert.strictEqual(ctrl._resolveSnapKey(tangDyn, 704), 's_tang_wz2');
-        assert.strictEqual(ctrl._resolveSnapKey(tangDyn, 705), 's_tang_a5');
+        assert.strictEqual(ctrl._resolveSnapKey(tangDyn, 705), 's_tang_a5z');
+        assert.strictEqual(ctrl._resolveSnapKey(tangDyn, 713), 's_tang_a5');
 
         for (const sk of ['s_tang_wz1', 's_tang_wz2']) {
           const wzMain = snapshots[sk].polities.find((p) => p.role === 'main');
@@ -7922,6 +8011,59 @@ function main() {
         ctrl.locale = 'zh';
       }
 
+      // CUJ 45: High-resolution terrain tiles — reset view stays on the base relief, Data Saver is
+      // respected, every indexed tile exists, and the base relief shares the tiles' projection.
+      {
+        assert(
+          indexHtml.includes('<g id="terrain-relief-layer">') &&
+            indexHtml.includes('<g id="grp-terrain-tiles"></g>') &&
+            cssSrc.includes('#terrain-relief-layer {\n  opacity: 0.48;'),
+          'index.html must wrap #terrain-relief-img and #grp-terrain-tiles in #terrain-relief-layer, which owns the 0.48 relief opacity'
+        );
+        const terrainIdx = JSON.parse(fs.readFileSync(path.join(ROOT, 'assets', 'terrain', 'index.json'), 'utf8'));
+        assert(
+          terrainIdx.tileSize === 512 && Object.keys(terrainIdx.levels).length > 0,
+          'assets/terrain/index.json must declare 512 px tiles and at least one level'
+        );
+        for (const [z, list] of Object.entries(terrainIdx.levels)) {
+          for (const xy of list) {
+            const [x, y] = xy.split('_');
+            assert(
+              fs.existsSync(path.join(ROOT, 'assets', 'terrain', z, x, `${y}.webp`)),
+              `assets/terrain/index.json lists ${z}/${x}/${y}.webp but the file is missing`
+            );
+          }
+        }
+        const buildPy = fs.readFileSync(path.join(ROOT, 'scripts', 'build_terrain_tiles.py'), 'utf8');
+        assert(
+          buildPy.includes('PROJ_W, PROJ_H, WEST, EAST, SOUTH, NORTH = 1000, 700, 66, 142, 14, 55') &&
+            buildPy.includes('BASE_RECT = (-80, -40, 1160, 780)') &&
+            indexHtml.includes('x="-80" y="-40" width="1160" height="780"') &&
+            appCode.includes('new MercatorProjector(1000, 700, {\n        west: 66,\n        east: 142,\n        south: 14,\n        north: 55,'),
+          'scripts/build_terrain_tiles.py base-relief constants must mirror the app projector and the #terrain-relief-img rect'
+        );
+        const proto = ControllerClass.prototype;
+        const tCtrl = {
+          projector: new sandbox.window.MercatorProjector(1000, 700, { west: 66, east: 142, south: 14, north: 55 }),
+          _terrainTileSize: terrainIdx.tileSize,
+          _terrainIndex: new Map(Object.entries(terrainIdx.levels).map(([z, l]) => [Number(z), new Set(l)])),
+          _getDefaultCamera: () => ({ x: 350, y: 215, w: 500, h: 420, zoom: 2 }),
+          _isMobileViewport: () => false,
+        };
+        // Camera width in SVG units on a ~1400 CSS px wide map.
+        const level = (w) => proto._terrainTileLevel.call(tCtrl, { w }, 1400 / w, 'free');
+        assert.strictEqual(level(500), null, 'The default (reset) camera must stay on the base relief without loading tiles');
+        const zDeep = level(125);
+        assert(zDeep !== null && tCtrl._terrainIndex.has(zDeep), `Max zoom must select an indexed tile level, got ${zDeep}`);
+        assert(level(300) !== null && level(300) <= zDeep, 'Zooming in must never select a coarser tile level');
+        const origNav = sandbox.navigator;
+        sandbox.navigator = { connection: { saveData: true } };
+        assert.strictEqual(level(125), null, 'Data Saver must skip terrain tiles');
+        sandbox.navigator = { connection: { effectiveType: 'slow-2g' } };
+        assert.strictEqual(level(125), null, 'Slow 2G links must skip terrain tiles');
+        sandbox.navigator = origNav;
+      }
+
       // CUJ 44: Strict Zero-Side-Effect Pan/Scrub/Hover Performance Invariants (Issue #196)
       assert(
         cssSrc.includes('mix-blend-mode: multiply') &&
@@ -7952,6 +8094,71 @@ function main() {
             },
           };
         };
+
+        // Hover cards are measured, centred above the pointer with one 16 px gap
+        // for every pointer type, flip 56 px below near the top edge, and stay
+        // inside the map. Placement must not read computed styles on hover.
+        const frameRect = { left: 100, top: 50, width: 800, height: 600 };
+        let tipSize = { width: 240, height: 70 };
+        const priorComputedStyle = sandbox.window.getComputedStyle;
+        sandbox.window.getComputedStyle = () => {
+          throw new Error('Hover placement must not read computed styles');
+        };
+        const hoverCtrl = Object.assign(Object.create(proto), {
+          locale: 'zh',
+          _id: () => ({ getBoundingClientRect: () => frameRect }),
+          hoverTip: {
+            innerHTML: '', style: {}, classList: makeCls(),
+            querySelector: () => null,
+            getBoundingClientRect: () => tipSize,
+          },
+        });
+        for (const pointerType of ['mouse', 'touch']) for (const [x, y, width, height] of [
+          [400, 300, 240, 70], [400, 12, 240, 70], [400, 100, 240, 70],
+          [12, 12, 240, 70], [788, 12, 240, 70],
+          [12, 588, 240, 70], [788, 588, 240, 70], [700, 300, 300, 160],
+        ]) {
+          tipSize = { width, height };
+          hoverCtrl._showHoverTip({
+            clientX: x + frameRect.left, clientY: y + frameRect.top, pointerType, target: {},
+          }, '<b>开封府</b>');
+          const left = parseFloat(hoverCtrl.hoverTip.style.left);
+          const top = parseFloat(hoverCtrl.hoverTip.style.top);
+          assert(left >= 8 && top >= 8 && left + width <= 792 && top + height <= 592,
+            'Wrapped hover cards must fit inside the map');
+          if (x - width * 0.5 >= 8 && x + width * 0.5 <= 792) {
+            assert(Math.abs(left + width * 0.5 - x) < 1e-7,
+              'Hover cards must center over their hovered point when there is room');
+          }
+          if (y - 16 - height >= 8) {
+            assert(Math.abs(top + height - (y - 16)) < 1e-7,
+              `${pointerType} hover cards must sit 16 px above the pointer`);
+          } else {
+            assert.strictEqual(top, y + 56, `${pointerType} hover cards must flip 56 px below the pointer near the top edge`);
+          }
+        }
+        // City labels can move above, beside or below the dot as zoom changes.
+        // A high label must remain readable; near the top, keep the fallback.
+        tipSize = { width: 240, height: 70 };
+        for (const [placement, y, labelTop] of [
+          ['above', 300, 260], ['beside', 300, 294], ['below', 300, 320],
+          ['near the top edge', 100, 12],
+        ]) {
+          const nameEl = { getBoundingClientRect: () => ({ top: frameRect.top + labelTop }) };
+          hoverCtrl._showHoverTip({ clientX: 400 + frameRect.left, clientY: y + frameRect.top }, '<b>开封府</b>', nameEl);
+          const top = parseFloat(hoverCtrl.hoverTip.style.top);
+          const anchorTop = Math.min(y, labelTop);
+          if (anchorTop - 16 - tipSize.height >= 8) {
+            assert(top + tipSize.height <= labelTop - 16,
+              `Tooltip must stay at least 16 px above a city name ${placement}`);
+            assert(Math.abs(top + tipSize.height - (anchorTop - 16)) < 1e-7,
+              `City name ${placement} must use the higher anchor`);
+          } else {
+            assert.strictEqual(top, y + 56, 'High city names must fall back 56 px below the pointer');
+          }
+        }
+        if (priorComputedStyle === undefined) delete sandbox.window.getComputedStyle;
+        else sandbox.window.getComputedStyle = priorComputedStyle;
 
         // 44a. Pure camera pan commits exact viewBox (no stage CSS transform checkerboarding) and suppresses infinite pulse animations via is-camera-moving
         let viewBoxWrites = 0;
