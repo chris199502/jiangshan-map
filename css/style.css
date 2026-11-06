@@ -1332,6 +1332,18 @@ h2 {
   overflow-wrap: break-word;
 }
 
+#milestone-balloon .ep-distance {
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.milestone-pin.is-user-location .ev-core,
+.milestone-pin.is-user-location .ev-ring {
+  visibility: hidden;
+}
+
 /* Trace Place / Genealogy Card */
 #genealogy-card {
   position: absolute;
@@ -3625,6 +3637,96 @@ html[lang="en"] .genealogy-list li {
   pointer-events: none;
 }
 
+.user-location-control {
+  position: relative;
+  pointer-events: auto;
+}
+
+.map-view-controls {
+  display: contents;
+}
+
+.user-location-btn {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #343438;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.13);
+  backdrop-filter: blur(12px);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, transform 0.1s;
+}
+
+.user-location-btn:hover {
+  background: #fff;
+  color: #007aff;
+}
+
+.user-location-btn:active {
+  transform: scale(0.95);
+}
+
+.user-location-btn:focus-visible {
+  outline: 3px solid #007aff;
+  outline-offset: 3px;
+}
+
+.user-location-btn.has-location {
+  color: #007aff;
+}
+
+.user-location-btn.has-location path {
+  fill: currentColor;
+}
+
+.user-location-btn[aria-busy="true"] {
+  color: #8d8d93;
+}
+
+.user-location-status {
+  position: absolute;
+  bottom: calc(100% + 9px);
+  right: 0;
+  width: max-content;
+  max-width: min(260px, calc(100vw - 32px));
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.97);
+  color: #343438;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+  font: 12px/1.5 var(--sans-stack);
+  pointer-events: none;
+}
+
+#grp-user-location {
+  pointer-events: none;
+}
+
+.user-location-marker {
+  pointer-events: all;
+  cursor: pointer;
+}
+
+.user-location-marker:focus-visible .user-location-dot {
+  stroke: #004cba;
+}
+
+.user-location-halo {
+  fill: rgba(0, 122, 255, 0.14);
+}
+
+.user-location-dot {
+  fill: #007aff;
+  stroke: white;
+  stroke-width: 2.5px;
+  filter: drop-shadow(0 1px 3px rgba(0, 70, 160, 0.35));
+}
+
 .canvas-reset-btn {
   pointer-events: auto;
   display: inline-flex;
@@ -3682,6 +3784,73 @@ html[lang="en"] .genealogy-list li {
   border-right: 1.6px solid var(--text-secondary);
   filter: drop-shadow(0 0 2px rgba(246, 241, 230, 0.9));
   transition: width 0.12s ease-out;
+}
+
+@media (max-width: 900px) {
+  #canvas-br-dock {
+    right: 8px;
+    bottom: 8px;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+  }
+
+  .map-view-controls {
+    display: flex;
+    flex-direction: column;
+    border-radius: 12px;
+    background: rgba(250, 246, 237, 0.96);
+    box-shadow: 0 2px 8px rgba(43, 38, 34, 0.1), inset 0 0 0 1px var(--hairline);
+    backdrop-filter: blur(12px);
+    pointer-events: auto;
+  }
+
+  .map-view-controls .user-location-btn,
+  .map-view-controls .canvas-reset-btn {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+
+  .map-view-controls .user-location-btn {
+    border-radius: 12px 12px 0 0;
+  }
+
+  .map-view-controls .user-location-btn:not(.has-location):not([aria-busy="true"]) {
+    color: var(--text-secondary);
+  }
+
+  .map-view-controls .user-location-btn svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .map-view-controls .canvas-reset-btn {
+    justify-content: center;
+    gap: 0;
+    border-top: 1px solid var(--hairline);
+    border-radius: 0 0 12px 12px;
+    color: var(--text-secondary);
+  }
+
+  .map-view-controls .canvas-reset-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .map-view-controls #lbl-reset-camera {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }
 
 /* #6 Collapsible Chronicle Sidebar / Full-Map Mode */

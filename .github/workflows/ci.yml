@@ -30,3 +30,6 @@ jobs:
 
       - name: Check custom years-ago display
         run: node scripts/validate_years_ago.cjs
+
+      - name: Check independent user location
+        run: node scripts/validate_user_location.cjs

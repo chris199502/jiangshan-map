@@ -308,7 +308,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=Noto+Sans+SC:wght@400;500&display=swap" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&text=%20%26%27CDEFHJKMNPQRSTWYabcdefghilmnoprstuvxy%E4%B8%89%E4%B8%9C%E4%B8%AD%E4%BA%94%E4%BA%BA%E4%BB%A3%E5%85%83%E5%85%AD%E5%85%B1%E5%8C%97%E5%8D%81%E5%8D%8E%E5%8D%97%E5%92%8C%E5%94%90%E5%9B%BD%E5%AE%8B%E5%B1%B1%E5%BA%8F%E6%88%98%E6%97%B6%E6%98%8E%E6%99%8B%E6%9C%9D%E6%B0%91%E6%B1%89%E6%B1%9F%E6%B8%85%E7%A7%A6%E8%A5%BF%E9%9A%8B&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css?v=522b1ec9" />
+  <link rel="stylesheet" href="css/style.css?v=d5f23bc9" />
   <!-- Analytics: Vercount & Cloudflare Web Analytics -->
   <script defer src="https://events.vercount.one/js"></script>
   <script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "dc645937f75341b2a7416bd1fb81b635", "spa": false}'></script>
@@ -431,6 +431,7 @@
               <g id="grp-journey"></g>
               <g id="grp-challenge"></g>
               <g id="grp-genealogy"></g>
+              <g id="grp-user-location" pointer-events="none"></g>
             </g>
           </svg>
         </div>
@@ -449,10 +450,18 @@
         <div id="map-key" aria-live="polite"></div>
 
         <div id="canvas-br-dock">
+          <div class="map-view-controls">
+          <div class="user-location-control">
+            <button id="act-user-location" class="user-location-btn" type="button" title="我的位置" aria-label="我的位置" aria-busy="false" aria-pressed="false" aria-describedby="user-location-status">
+              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M20.4 3.6 3.9 10.1c-.7.3-.6 1.2.1 1.4l6.7 1.8 1.8 6.7c.2.7 1.1.8 1.4.1L20.4 3.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div id="user-location-status" class="user-location-status is-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+          </div>
           <button id="act-reset-camera" class="canvas-reset-btn" type="button" title="复位视图">
             <svg class="btn-svg" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/></svg>
             <span id="lbl-reset-camera">复位视图</span>
           </button>
+          </div>
           <div id="scale-bar-box" aria-hidden="true">
             <div class="scale-label" id="scale-label-text">500 km</div>
             <div class="scale-ruler" id="scale-ruler-bar"></div>
@@ -727,7 +736,7 @@
   <script src="js/map_data.js?v=933e5a96"></script>
   <script src="js/lore_data.js?v=cca4bd15"></script>
   <script src="js/zh_hant.js?v=e97ea63f"></script>
-  <script id="atlas-app-script" src="js/app.js?v=57bac40a" data-v-snapshots="80572c2b" data-v-i18n="4b2175d7"></script>
+  <script id="atlas-app-script" src="js/app.js?v=e113db58" data-v-snapshots="80572c2b" data-v-i18n="4b2175d7"></script>
   <script src="js/atlas_quiz.js?v=4b375854"></script>
 </body>
 </html>

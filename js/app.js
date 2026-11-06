@@ -853,6 +853,7 @@
       this.grpMilestones = this._id('grp-milestones');
       this.grpChallenge = this._id('grp-challenge');
       this.grpGenealogy = this._id('grp-genealogy');
+      this.grpUserLocation = this._id('grp-user-location');
       this.hoverTip = this._id('hover-tip');
       this.mapKey = this._id('map-key');
       this.milestoneBalloon = this._id('milestone-balloon');
@@ -1709,6 +1710,7 @@
       if (actReset) {
         actReset.title = this.locale === 'en' ? 'Reset camera view' : '复位视图';
       }
+      this._syncUserLocationUi();
       const lblChal = this._id('lbl-challenge') || this._id('act-challenge');
       if (lblChal) {
         lblChal.textContent = this.challenge
@@ -3939,6 +3941,9 @@
         pin.classList.toggle('is-past', isPast);
         pin.classList.toggle('is-past-occluded', isPastOccluded);
         pin.classList.toggle('is-current', isCurrent);
+        // Event coordinates are rounded to three decimals; 100 m represents the same site.
+        pin.classList.toggle('is-user-location', Boolean(this.userLocation) &&
+          this.projector.greatCircleKm(this.userLocation, [Number(pin.dataset.lng), Number(pin.dataset.lat)]) <= 0.1);
         if (isCurrent) currentPins.push(pin);
       });
       for (const pin of currentPins) {
@@ -4198,9 +4203,11 @@
           ? `<button type="button" class="ep-relic-seal" title="${relicTitle}"><span class="seal-stamp">玺</span><span>${relicLabel}</span></button>`
           : '';
       const closeTitle = this.locale === 'en' ? 'Dismiss event callout' : '关闭此事件浮签';
+      const distanceText = this.formatDistanceFromUser(anchorCoord);
       this.milestoneBalloon.innerHTML =
         `<div class="ep-head"><span class="ep-year">${yrText} · ${eraLabel}</span>${placeHtml}${relicHtml}<button type="button" class="ep-close" title="${closeTitle}" aria-label="${closeTitle}">×</button></div>` +
-        `<div class="ep-text">${headlineText}</div>`;
+        `<div class="ep-text">${headlineText}</div>` +
+        `<div class="ep-distance${distanceText ? '' : ' is-hidden'}">${distanceText}</div>`;
       const isMobile = typeof window !== 'undefined' && window.innerWidth <= 900;
       const maxW = isMobile ? Math.min(268, (window.innerWidth || 390) - 20) : 348;
       const headW =
@@ -4215,7 +4222,7 @@
       );
       const headLines = Math.max(1, Math.ceil(headW / Math.max(120, estW - 28)));
       const textLines = Math.max(1, Math.ceil(textW / Math.max(120, estW - 22)));
-      const estH = Math.round(16 + headLines * (isMobile ? 22 : 20) + textLines * 17.5);
+      const estH = Math.round(16 + headLines * (isMobile ? 22 : 20) + textLines * 17.5 + (distanceText ? 22 : 0));
       this._milestoneBalloonSize = { w: estW, h: estH };
       const placeBtns =
         typeof this.milestoneBalloon.querySelectorAll === 'function'
@@ -4271,6 +4278,15 @@
       const am = this.activeMilestone;
       const anchorCoord = am && (am.anchorCoord || am.milestone.coord);
       if (!anchorCoord) return;
+      const distanceEl = this.milestoneBalloon.querySelector('.ep-distance');
+      if (distanceEl) {
+        const distanceText = this.formatDistanceFromUser(anchorCoord);
+        if (distanceEl.textContent !== distanceText) {
+          distanceEl.textContent = distanceText;
+          distanceEl.classList.toggle('is-hidden', !distanceText);
+          this._measureMilestoneBalloonSize();
+        }
+      }
       const [sx, sy] = this.projector.toScreen(anchorCoord[0], anchorCoord[1]);
       const rect =
         viewportRect ||
@@ -4380,6 +4396,16 @@
       this.milestoneBalloon.style.setProperty('--caret-y', `${caretY}px`);
       this.milestoneBalloon.style.left = `${Math.round(left)}px`;
       this.milestoneBalloon.style.top = `${Math.round(top)}px`;
+    }
+
+    formatDistanceFromUser(coord) {
+      if (!this.userLocation) return '';
+      const km = this.projector.greatCircleKm(this.userLocation, coord);
+      const value = km < 1 ? Math.round(km * 1000) : km < 10 ? km.toFixed(1) : Math.round(km);
+      if (this.locale === 'en') {
+        return `About ${value} ${km < 1 ? 'm' : 'km'} from you (straight line)`;
+      }
+      return this._zh(`距你约 ${value} ${km < 1 ? '米' : '公里'}（直线）`);
     }
 
     closeMilestoneBalloon() {
@@ -9870,6 +9896,11 @@
       const rw = rect.width || 1000;
       const rh = rect.height || 700;
       const screenScale = Math.min(rw / this.camera.w, rh / this.camera.h);
+      const locationMarker = this.grpUserLocation && this.grpUserLocation.firstChild;
+      if (locationMarker) {
+        setSvgAttribute(locationMarker, 'transform',
+          `translate(${locationMarker.getAttribute('data-x')},${locationMarker.getAttribute('data-y')}) scale(${1 / screenScale})`);
+      }
       const [, centerLat] = this.projector.toGeo(
         this.camera.x + this.camera.w * 0.5,
         this.camera.y + this.camera.h * 0.5
@@ -11393,6 +11424,142 @@
         });
       }
       if (this.locale === 'zh-tw') this._applyZhHantDom(this.journeyCard);
+    }
+
+    _syncUserLocationUi() {
+      const button = this._id('act-user-location');
+      if (!button) return;
+      const status = this.userLocationStatus || 'idle';
+      const messages = {
+        locating: ['正在获取位置…', 'Finding your location…'],
+        denied: ['请在浏览器设置中允许位置访问后重试', 'Allow location access in your browser settings, then retry.'],
+        unavailable: ['暂时无法获取位置，请稍后重试', 'Location is unavailable. Please retry.'],
+        timeout: ['定位超时，请重试', 'Location timed out. Please retry.'],
+        unsupported: ['当前浏览器不支持定位', 'This browser does not support location.'],
+        insecure: ['请通过 HTTPS 打开页面后定位', 'Open this page over HTTPS to use location.'],
+        outside: ['当前位置超出本地图覆盖范围', 'Your location is outside this atlas’s coverage.'],
+      };
+      const en = this.locale === 'en';
+      const label = en ? 'My location' : this._zh('我的位置');
+      const enabled = status === 'locating' || Boolean(this.userLocation);
+      const buttonLabel = enabled ? (en ? 'Turn off location' : this._zh('关闭定位')) : label;
+      button.title = buttonLabel;
+      button.setAttribute('aria-label', buttonLabel);
+      button.disabled = false;
+      button.setAttribute('aria-busy', String(status === 'locating'));
+      button.setAttribute('aria-pressed', String(enabled));
+      button.classList.toggle('has-location', Boolean(this.userLocation));
+      const marker = this.grpUserLocation.firstElementChild;
+      if (marker) marker.setAttribute('aria-label', label);
+      const message = this._id('user-location-status');
+      message.textContent = messages[status] ? (en ? messages[status][1] : this._zh(messages[status][0])) : '';
+      message.classList.toggle('is-hidden', !message.textContent);
+    }
+
+    openUserLocationEvent() {
+      this._cancelPendingHover();
+      this.hoverTip.classList.add('is-hidden');
+      this.hoverTip.classList.remove('is-interactive');
+      const pins = this.grpMilestones.classList.contains('is-hidden') ? [] :
+        Array.from(this.grpMilestones.querySelectorAll('.milestone-pin.is-user-location'))
+          .filter(pin => !pin.classList.contains('is-future'));
+      const pin = pins.find(pin => pin.classList.contains('is-current')) || pins[pins.length - 1];
+      this.closeMilestoneBalloon();
+      if (!pin) return;
+      const dynasty = this.dynasties[this.dynastyIdx];
+      this.openMilestoneBalloon(dynasty, dynasty.milestones[Number(pin.dataset.idx)], {
+        isAuto: false, siteIdx: Number(pin.dataset.siteIdx),
+      });
+    }
+
+    toggleUserLocation() {
+      if (this.userLocation || this.userLocationStatus === 'locating') {
+        this._userLocationRequest = null;
+        this._userLocationShouldCenter = false;
+        this.userLocation = null;
+        this.userLocationStatus = 'idle';
+        this.grpUserLocation.innerHTML = '';
+        this._updateMilestoneStates(this.dynasties[this.dynastyIdx]);
+        if (this.activeMilestone) this._positionMilestoneBalloon();
+        this._syncUserLocationUi();
+        return;
+      }
+      this.requestUserLocation();
+    }
+
+    requestUserLocation() {
+      if (this.userLocationStatus === 'locating') return;
+      if (!window.isSecureContext || !navigator.geolocation) {
+        this.userLocationStatus = !window.isSecureContext ? 'insecure' : 'unsupported';
+        this._syncUserLocationUi();
+        return;
+      }
+      this._cancelCameraAnimation();
+      const camera = { ...this.camera };
+      const request = this._userLocationRequest = {};
+      this._userLocationShouldCenter = true;
+      this.userLocationStatus = 'locating';
+      this._syncUserLocationUi();
+      navigator.geolocation.getCurrentPosition(
+        ({ coords }) => {
+          if (this._userLocationRequest !== request) return;
+          const { longitude: lng, latitude: lat } = coords;
+          const { west, east, south, north } = this.projector.bounds;
+          if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+            this.userLocationStatus = 'unavailable';
+          } else if (lng < west || lng > east || lat < south || lat > north) {
+            this.userLocationStatus = 'outside';
+          } else {
+            this.userLocation = [lng, lat];
+            const [x, y] = this.projector.toScreen(lng, lat);
+            this.grpUserLocation.innerHTML = '';
+            const marker = this._svgNode('g', {
+              class: 'user-location-marker', 'data-x': x, 'data-y': y,
+              role: 'button', tabindex: '0',
+            }, this.grpUserLocation);
+            this._svgNode('circle', { class: 'user-location-halo', r: 16 }, marker);
+            this._svgNode('circle', { class: 'user-location-dot', r: 6 }, marker);
+            for (const type of ['pointerdown', 'pointerup', 'pointermove', 'dblclick']) {
+              marker.addEventListener(type, event => event.stopPropagation());
+            }
+            marker.addEventListener('pointerenter', () => {
+              this._cancelPendingHover();
+              this.hoverTip.classList.add('is-hidden');
+              this.hoverTip.classList.remove('is-interactive');
+            });
+            marker.addEventListener('click', event => {
+              event.stopPropagation();
+              this.openUserLocationEvent();
+            });
+            marker.addEventListener('keydown', event => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                event.stopPropagation();
+                this.openUserLocationEvent();
+              }
+            });
+            this._updateMilestoneStates(this.dynasties[this.dynastyIdx]);
+            this._updateScaleBar();
+            // A delayed permission prompt must not steal the view from a newer search or gesture.
+            if (this._userLocationShouldCenter && ['x', 'y', 'w', 'h'].every(key => this.camera[key] === camera[key])) {
+              const w = Math.min(this.camera.w, 1000 / 3.25);
+              const h = w * this._getViewportAspect();
+              this.stopAutoplay();
+              this._animateCameraTo({ x: x - w / 2, y: y - h / 2, w, h });
+            } else if (this.activeMilestone) {
+              this._positionMilestoneBalloon();
+            }
+            this.userLocationStatus = 'ready';
+          }
+          this._syncUserLocationUi();
+        },
+        (error) => {
+          if (this._userLocationRequest !== request) return;
+          this.userLocationStatus = { 1: 'denied', 2: 'unavailable', 3: 'timeout' }[error.code] || 'unavailable';
+          this._syncUserLocationUi();
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+      );
     }
 
     resetCamera() {
@@ -13270,6 +13437,12 @@
       });
 
       this._id('act-reset-camera').addEventListener('click', () => this.resetCamera());
+      this._id('act-user-location').addEventListener('click', () => this.toggleUserLocation());
+      for (const type of ['pointerdown', 'wheel', 'keydown', 'input']) {
+        document.addEventListener(type, () => {
+          this._userLocationShouldCenter = false;
+        }, { capture: true, passive: true });
+      }
       const togglePaneBtn = this._id('act-toggle-pane');
       if (togglePaneBtn) {
         togglePaneBtn.addEventListener('click', () => {
