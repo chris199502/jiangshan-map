@@ -1985,7 +1985,7 @@ function main() {
 
   // CUJ 18: UX Friction Polish — same-effective-year milestone stepping, balloon nav, genealogy camera preservation, and pre-rendered HTML sync
   assert(
-    indexHtml.includes('value="-403"') &&
+    indexHtml.includes('value="前403"') &&
       indexHtml.includes('公元前403年 · 周威烈王二十三年') &&
       indexHtml.includes(dynasties[0].summary) &&
       indexHtml.includes(dynasties[0].milestones[0].headline) &&

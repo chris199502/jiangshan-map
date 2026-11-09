@@ -1179,6 +1179,39 @@
       return compact ? `${n}` : `公元 ${n} 年`;
     }
 
+    // The year box shows 前403 / 403 BCE like the rest of the UI and also accepts -403.
+    _syncYearInput() {
+      const inp = this._id('inp-year');
+      if (!inp) return;
+      const y = this.year === 0 ? 1 : this.year;
+      inp.value = this.formatYear(y, true);
+      const suffix = this._id('txt-year-suffix');
+      if (suffix) {
+        suffix.textContent = this.locale === 'en' && y < 0 ? '' : this.uiStr('year_unit', '年');
+      }
+    }
+
+    _parseYearInput(text) {
+      const s = String(text || '')
+        .trim()
+        .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+        .replace(/[－−–—]/g, '-');
+      const digits = s.match(/\d+/);
+      if (!digits) return null;
+      const bce = s.startsWith('-') || s.includes('前') || /\bB\.?C/i.test(s);
+      const n = Number(digits[0]);
+      return bce ? -n : n;
+    }
+
+    _commitYearInput(inp) {
+      const y = this._parseYearInput(inp.value);
+      if (!this.challenge && y !== null) {
+        this.stopAutoplay();
+        this.jumpToYear(y);
+      }
+      this._syncYearInput();
+    }
+
     formatYearsAgo(y) {
       const year = Math.round(y);
       // Historical BCE years are negative; there is no year zero.
@@ -1801,7 +1834,7 @@
         'caveat',
         '历史疆域与政区为示意性近似，非精确测绘边界。地形晕渲据 SRTM、GMTED2010 公开高程数据。'
       );
-      this._id('txt-year-suffix').textContent = this.uiStr('year_unit', '年');
+      this._syncYearInput();
       const stepPrevBtn = this._id('act-step-prev');
       if (stepPrevBtn) {
         stepPrevBtn.title =
@@ -1828,7 +1861,7 @@
       if (inpYear) {
         inpYear.setAttribute(
           'aria-label',
-          this.locale === 'en' ? 'Enter year (negative for BCE)' : '输入年份（负数为公元前）'
+          this.locale === 'en' ? 'Enter year, e.g. 403 BCE or -403' : '输入年份，如 前403 或 -403'
         );
       }
       const scrubberDock = this._id('scrubber-dock');
@@ -5414,6 +5447,15 @@
       deskToggle.className = 'key-desktop-toggle';
       deskToggle.innerHTML =
         '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      if (this.legendCollapsed === undefined) {
+        let saved = null;
+        try {
+          saved = localStorage.getItem('jiangshan_legend_collapsed');
+        } catch (_) {}
+        const frame = this._id('viewport-frame');
+        this.legendCollapsed =
+          saved !== null ? saved === '1' : Boolean(frame && frame.clientHeight < 650);
+      }
       const syncDeskToggle = () => {
         const label = this.legendCollapsed
           ? this.locale === 'en' ? 'Expand legend' : this._zh('展开图例')
@@ -5427,6 +5469,9 @@
       deskToggle.addEventListener('click', (e) => {
         e.stopPropagation();
         this.legendCollapsed = !this.legendCollapsed;
+        try {
+          localStorage.setItem('jiangshan_legend_collapsed', this.legendCollapsed ? '1' : '0');
+        } catch (_) {}
         syncDeskToggle();
       });
       bar.appendChild(deskToggle);
@@ -9403,8 +9448,7 @@
 
       const track = this._id('scrubber-track');
       if (track) track.setAttribute('aria-valuenow', String(this.year));
-      const inpYear = this._id('inp-year');
-      if (inpYear) inpYear.value = this.year === 0 ? 1 : this.year;
+      this._syncYearInput();
       if (this.embed) this._syncEmbedBadge();
       if (this._lastActiveBandIdx !== this.dynastyIdx) {
         const bandsEl = this._id('dynasty-bands');
@@ -13946,11 +13990,7 @@
         playSpeedBtn.addEventListener('click', () => this.cyclePlaySpeed());
       }
 
-      this._id('inp-year').addEventListener('change', (e) => {
-        if (this.challenge) return;
-        this.stopAutoplay();
-        this.jumpToYear(Number(e.target.value));
-      });
+      this._id('inp-year').addEventListener('change', (e) => this._commitYearInput(e.target));
       const stepPrevBtn = this._id('act-step-prev');
       if (stepPrevBtn) {
         stepPrevBtn.addEventListener('click', () => this.stepTimelineNode(-1));
@@ -14047,10 +14087,7 @@
         if (e.target && e.target.id === 'inp-year') {
           if (e.key === 'Enter') {
             e.preventDefault();
-            if (!this.challenge) {
-              this.stopAutoplay();
-              this.jumpToYear(Number(e.target.value));
-            }
+            this._commitYearInput(e.target);
             e.target.blur();
             return;
           }
