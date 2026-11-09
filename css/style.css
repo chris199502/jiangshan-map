@@ -1943,6 +1943,61 @@ h2 {
   flex-wrap: nowrap;
 }
 
+.key-desktop-toggle {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.key-desktop-toggle:hover {
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--vermilion);
+}
+
+.key-desktop-toggle:focus-visible {
+  outline: 2px solid var(--vermilion);
+  outline-offset: -2px;
+}
+
+.key-desktop-toggle svg {
+  transition: transform 0.15s;
+}
+
+#map-key.is-collapsed .key-desktop-toggle svg {
+  transform: rotate(180deg);
+}
+
+@media (min-width: 901px) {
+  /* Room for the collapse toggle without wrapping the phase dots. */
+  #map-key {
+    max-width: 360px;
+  }
+
+  .key-phase-bar {
+    padding-right: 22px;
+  }
+
+  #map-key.is-collapsed > :not(.key-phase-bar) {
+    display: none;
+  }
+
+  #map-key.is-collapsed .key-phase-bar {
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+}
+
 .phase-dot {
   width: 5.5px;
   height: 5.5px;
@@ -4560,8 +4615,7 @@ html[lang="en"] #act-toggle-pane .tp-label {
 
 /* #8 Mobile Compact Chronicle Bar (Scheme A) & Collapsible Legend */
 .mobile-chronicle-btn,
-.key-mobile-toggle,
-.key-phase-bar.is-single-phase {
+.key-mobile-toggle {
   display: none;
 }
 
@@ -4774,8 +4828,8 @@ html[lang="en"] #act-toggle-pane .tp-label {
   }
 
   /* Mobile Compact Map Legend (#map-key) */
-  .key-phase-bar.is-single-phase {
-    display: flex;
+  .key-desktop-toggle {
+    display: none;
   }
 
   .key-phase-dots {

@@ -5408,6 +5408,28 @@
         syncMobToggleLabel();
       });
       bar.appendChild(mobToggle);
+
+      const deskToggle = document.createElement('button');
+      deskToggle.type = 'button';
+      deskToggle.className = 'key-desktop-toggle';
+      deskToggle.innerHTML =
+        '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      const syncDeskToggle = () => {
+        const label = this.legendCollapsed
+          ? this.locale === 'en' ? 'Expand legend' : this._zh('展开图例')
+          : this.locale === 'en' ? 'Collapse legend' : this._zh('收起图例');
+        deskToggle.title = label;
+        deskToggle.setAttribute('aria-label', label);
+        deskToggle.setAttribute('aria-expanded', this.legendCollapsed ? 'false' : 'true');
+        this.mapKey.classList.toggle('is-collapsed', Boolean(this.legendCollapsed));
+      };
+      syncDeskToggle();
+      deskToggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.legendCollapsed = !this.legendCollapsed;
+        syncDeskToggle();
+      });
+      bar.appendChild(deskToggle);
       this.mapKey.appendChild(bar);
 
       if (snap.caption) {
