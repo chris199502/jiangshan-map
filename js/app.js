@@ -9153,6 +9153,8 @@
     }
 
     _yearToProgress(y) {
+      const w = this._tlWindow;
+      if (w) return Math.max(0, Math.min(1, (y - w.from) / (w.to - w.from)));
       const idx = this._findDynastyIndex(y);
       const d = this.dynasties[idx];
       const [lo, hi] = this._bandYearSpan(d);
@@ -9165,6 +9167,8 @@
     }
 
     _progressToYear(frac) {
+      const w = this._tlWindow;
+      if (w) return Math.round(w.from + Math.max(0, Math.min(1, frac)) * (w.to - w.from));
       const clamped = Math.max(0, Math.min(0.999999, frac));
       let idx = this.dynasties.length - 1;
       while (idx > 0 && this.bandOffsets[idx] > clamped) idx--;
@@ -9205,6 +9209,7 @@
         this._clearQuickSearchInput();
         cancelRaf();
         scrubbing = true;
+        this._tlDragging = true;
         trackRect = track.getBoundingClientRect();
         track.setPointerCapture(e.pointerId);
         scrubAt(e.clientX, false);
@@ -9235,6 +9240,8 @@
         scrubbing = false;
         trackRect = null;
         if (x !== null) scrubAt(x);
+        this._tlDragging = false;
+        if (this._tlWindow) this._syncScrubberUi();
         this.isScrubbing = false;
         if (this.svg && this.svg.classList) this.svg.classList.remove('is-scrubbing');
         if (wasDragging && !this.activePerson && this.dynasties && this.dynasties[this.dynastyIdx]) {
@@ -9242,6 +9249,7 @@
         }
       });
       track.addEventListener('pointercancel', () => {
+        this._tlDragging = false;
         const wasDragging = Boolean(this.isScrubbing);
         cancelRaf();
         scrubbing = false;
@@ -9257,8 +9265,10 @@
     _buildScrubberBands() {
       const bands = this._id('dynasty-bands');
       const ticks = this._id('scrubber-ticks');
+      const eraStrip = this._id('era-strip');
       bands.innerHTML = '';
       ticks.innerHTML = '';
+      eraStrip.innerHTML = '';
       this.dynasties.forEach((d, idx) => {
         const cell = document.createElement('div');
         cell.className = 'band-cell';
@@ -9311,6 +9321,19 @@
 
         bands.appendChild(cell);
 
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'era-chip';
+        chip.style.setProperty('--chip-tint', d.tint);
+        if (!this.bandWeights[idx]) chip.style.display = 'none';
+        chip.addEventListener('click', () => {
+          if (this.challenge) return;
+          this.stopAutoplay();
+          this._clearQuickSearchInput();
+          this.jumpToYear(d.focusYear !== undefined ? d.focusYear : d.fromYear);
+        });
+        eraStrip.appendChild(chip);
+
         const tick = document.createElement('span');
         tick.style.left = `${(this.bandOffsets[idx] * 100).toFixed(3)}%`;
         if (!this.bandWeights[idx]) tick.style.display = 'none';
@@ -9335,7 +9358,18 @@
     _refreshBandLabels() {
       const cells = this._id('dynasty-bands').children;
       const tickNodes = this._id('scrubber-ticks').children;
+      const chips = this._id('era-strip').children;
+      const eraStrip = this._id('era-strip');
+      eraStrip.setAttribute('aria-label', this.locale === 'en' ? 'Dynasties' : this._zh('朝代'));
       this.dynasties.forEach((d, idx) => {
+        const chip = chips[idx];
+        if (chip) {
+          chip.textContent = this.dynastyBadge(d);
+          chip.title =
+            this.locale === 'en'
+              ? `${this.dynastyName(d)} (${this.formatSpan(d)})`
+              : `${this.dynastyName(d)}（${this.formatSpan(d)}）`;
+        }
         const cell = cells[idx];
         if (cell) {
           const lbl = cell.querySelector('.band-label') || cell;
@@ -9400,7 +9434,96 @@
       }
     }
 
+    // Phones show the current dynasty (plus a little of its neighbours) on a zoomed ruler,
+    // with a scrollable row of era chips for jumping between dynasties.
+    _syncTimelineWindow() {
+      const compact =
+        !document.documentElement.classList.contains('is-embed') &&
+        window.matchMedia('(max-width: 640px)').matches;
+      if (!compact) {
+        this._tlWindow = null;
+        return;
+      }
+      if (this._tlDragging && this._tlWindow) return;
+      const track = this._id('scrubber-track');
+      const width = (track && track.clientWidth) || 300;
+      const w = this._tlWindow;
+      if (w && w.idx === this.dynastyIdx && w.width === width && w.locale === this.locale) return;
+      const d = this.dynasties[this.dynastyIdx];
+      const pad = Math.max(3, Math.round((d.toYear - d.fromYear) * 0.06));
+      this._tlWindow = {
+        idx: this.dynastyIdx,
+        width,
+        locale: this.locale,
+        from: Math.max(this.minYear, d.fromYear - pad),
+        to: Math.min(this.maxYear, d.toYear + pad),
+      };
+      this._renderTimelineRuler(this._tlWindow);
+      // The ruler re-centred, so the thumb jumps instead of gliding across it during autoplay.
+      const motion = this._id('scrubber-motion');
+      if (motion) {
+        motion.style.transition = 'none';
+        requestAnimationFrame(() => requestAnimationFrame(() => (motion.style.transition = '')));
+      }
+      const strip = this._id('era-strip');
+      const chip = strip && strip.children[this.dynastyIdx];
+      if (chip && strip.clientWidth) {
+        strip.scrollTo({
+          left: chip.offsetLeft - (strip.clientWidth - chip.offsetWidth) / 2,
+          behavior: w ? 'smooth' : 'auto',
+        });
+      }
+    }
+
+    _renderTimelineRuler(w) {
+      const ruler = this._id('scrubber-ruler');
+      const ticks = this._id('scrubber-ruler-ticks');
+      if (!ruler || !ticks) return;
+      ruler.innerHTML = '';
+      ticks.innerHTML = '';
+      const span = w.to - w.from;
+      const pct = (y) => ((y - w.from) / span) * 100;
+      const add = (parent, cls, left, width) => {
+        const el = document.createElement('i');
+        el.className = cls;
+        el.style.left = `${left.toFixed(2)}%`;
+        if (width !== undefined) el.style.width = `${width.toFixed(2)}%`;
+        parent.appendChild(el);
+        return el;
+      };
+      this.dynasties.forEach((d, idx) => {
+        const lo = Math.max(w.from, d.fromYear);
+        const hi = Math.min(w.to, d.toYear);
+        if (hi <= lo) return;
+        const seg = add(ruler, 'ruler-seg', pct(lo), pct(hi) - pct(lo));
+        seg.style.background = d.tint;
+        seg.classList.toggle('is-active', idx === w.idx);
+        if (idx === w.idx && Array.isArray(d.phases)) {
+          for (const ph of d.phases.slice(0, -1)) {
+            if (ph.until > lo && ph.until < hi) add(ruler, 'band-phase-tick', pct(ph.until));
+          }
+        }
+        for (const m of d.milestones || []) {
+          const my = this._clampYearToDynasty(d, m.year);
+          if (my >= lo && my <= hi) add(ruler, 'band-ev-dot', pct(my));
+        }
+      });
+      const en = this.locale === 'en';
+      const minGapPx = en ? 62 : 48;
+      const yearsPerPx = span / w.width;
+      const step =
+        [1, 2, 5, 10, 20, 25, 50, 100, 200].find((s) => s / yearsPerPx >= minGapPx) || 500;
+      for (let y = Math.ceil(w.from / step) * step; y <= w.to; y += step) {
+        const x = (pct(y) / 100) * w.width;
+        if (y === 0 || x < 16 || x > w.width - 16) continue;
+        add(ruler, 'ruler-mark', pct(y));
+        const label = add(ticks, 'ruler-label', pct(y));
+        label.textContent = y < 0 ? (en ? `${-y} BCE` : `前${-y}`) : `${y}`;
+      }
+    }
+
     _syncScrubberUi() {
+      this._syncTimelineWindow();
       const pct = this._yearToProgress(this.year) * 100;
       const d = this.dynasties[this.dynastyIdx];
       const bubble = this._id('scrubber-Bubble');
@@ -9456,6 +9579,10 @@
           Array.from(bandsEl.children).forEach((el, idx) =>
             el.classList.toggle('is-active', idx === this.dynastyIdx)
           );
+          Array.from(this._id('era-strip').children).forEach((el, idx) => {
+            el.classList.toggle('is-active', idx === this.dynastyIdx);
+            el.setAttribute('aria-pressed', idx === this.dynastyIdx ? 'true' : 'false');
+          });
           this._lastActiveBandIdx = this.dynastyIdx;
         }
       }
@@ -13991,6 +14118,18 @@
       }
 
       this._id('inp-year').addEventListener('change', (e) => this._commitYearInput(e.target));
+      this._id('inp-year').addEventListener('blur', () => {
+        this._id('scrubber-dock').classList.remove('is-year-editing');
+      });
+      // Phones hide the year box; tapping the year bubble opens it for typing.
+      this._id('scrubber-Bubble').addEventListener('click', () => {
+        if (this.challenge || !window.matchMedia('(max-width: 640px)').matches) return;
+        const inp = this._id('inp-year');
+        this.stopAutoplay();
+        this._id('scrubber-dock').classList.add('is-year-editing');
+        inp.focus();
+        inp.select();
+      });
       const stepPrevBtn = this._id('act-step-prev');
       if (stepPrevBtn) {
         stepPrevBtn.addEventListener('click', () => this.stepTimelineNode(-1));
@@ -14093,6 +14232,7 @@
           }
           if (e.key === 'Escape') {
             e.preventDefault();
+            this._syncYearInput();
             e.target.blur();
             return;
           }

@@ -3130,6 +3130,84 @@ h2 {
   visibility: hidden;
 }
 
+/* Phone timeline (≤640px): era chips + zoomed ruler; hidden elsewhere. */
+#era-strip,
+#scrubber-ruler,
+#scrubber-ruler-ticks {
+  display: none;
+}
+
+.era-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 44px;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--hairline);
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--text-secondary);
+  font: 600 12.5px/1 var(--serif-stack);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.era-chip::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--chip-tint);
+}
+
+.era-chip.is-active {
+  border-color: transparent;
+  background: var(--chip-tint);
+  color: #fffaf0;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
+}
+
+.era-chip.is-active::before {
+  background: #fffaf0;
+}
+
+.era-chip:focus-visible {
+  outline: 2px solid var(--vermilion);
+  outline-offset: 1px;
+}
+
+.ruler-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  opacity: 0.4;
+}
+
+.ruler-seg.is-active {
+  opacity: 0.95;
+}
+
+.ruler-mark {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 7px;
+  background: rgba(255, 250, 240, 0.75);
+  pointer-events: none;
+}
+
+.ruler-label {
+  position: absolute;
+  top: 2px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
 .year-stepper {
   display: inline-flex;
   align-items: center;
@@ -3587,9 +3665,21 @@ html[lang="en"] .genealogy-list li {
     display: none;
   }
   .step-nav-btn {
-    width: 25px;
-    height: 25px;
-    font-size: 15px;
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+  }
+  /* Tapping the year bubble swaps it for the year box (hidden on phones otherwise). */
+  #scrubber-dock.is-year-editing .year-stepper input {
+    display: inline-block;
+    width: 76px;
+    text-align: center;
+  }
+  #scrubber-dock.is-year-editing .year-stepper .unit-label {
+    display: inline;
+  }
+  #scrubber-dock.is-year-editing #scrubber-Bubble {
+    visibility: hidden;
   }
   #scrubber-rail-wrap {
     grid-column: 1 / -1;
@@ -3600,12 +3690,44 @@ html[lang="en"] .genealogy-list li {
   #scrubber-track {
     height: 28px;
   }
+  html:not(.is-embed) #era-strip {
+    display: flex;
+    gap: 5px;
+    margin: 0 -10px 7px;
+    padding: 1px 10px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+  }
+  #era-strip::-webkit-scrollbar {
+    display: none;
+  }
+  html:not(.is-embed) #dynasty-bands,
+  html:not(.is-embed) #scrubber-ticks {
+    display: none;
+  }
+  html:not(.is-embed) #scrubber-ruler {
+    display: block;
+    position: absolute;
+    inset: 0;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  html:not(.is-embed) #scrubber-ruler-ticks {
+    display: block;
+    position: relative;
+    height: 14px;
+    margin-top: 2px;
+    font-size: 10px;
+    color: var(--text-muted);
+    pointer-events: none;
+  }
   #scrubber-Bubble {
     top: -54px;
     left: 70px !important;
-    right: 58px !important;
+    right: 90px !important;
     width: fit-content;
-    max-width: calc(100% - 128px);
+    max-width: calc(100% - 160px);
     margin: 0 auto;
     transform: none !important;
     font-size: 10.8px;
@@ -3613,6 +3735,8 @@ html[lang="en"] .genealogy-list li {
     border-radius: 999px;
     overflow: hidden;
     text-overflow: ellipsis;
+    pointer-events: auto;
+    cursor: pointer;
   }
   #scrubber-Bubble::after {
     display: none;
