@@ -3827,16 +3827,17 @@ html[lang="en"] .genealogy-list li {
 
 .user-location-btn:hover {
   background: #fff;
-  color: #007aff;
+  color: var(--vermilion);
 }
 
 .user-location-btn:active {
   transform: scale(0.95);
 }
 
-.user-location-btn:focus-visible {
-  outline: 3px solid #007aff;
-  outline-offset: 3px;
+.user-location-btn:focus-visible,
+.canvas-reset-btn:focus-visible {
+  outline: 2px solid var(--vermilion);
+  outline-offset: -2px;
 }
 
 .user-location-btn.has-location {
@@ -3851,17 +3852,32 @@ html[lang="en"] .genealogy-list li {
   color: #8d8d93;
 }
 
+.user-location-btn[aria-busy="true"] svg {
+  animation: user-location-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes user-location-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.86); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .user-location-btn[aria-busy="true"] svg {
+    animation: none;
+  }
+}
+
 .user-location-status {
   position: absolute;
   bottom: calc(100% + 9px);
   right: 0;
   width: max-content;
   max-width: min(260px, calc(100vw - 32px));
-  padding: 9px 12px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.97);
-  color: #343438;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+  padding: 8px 11px;
+  border-radius: 8px;
+  background: rgba(250, 246, 237, 0.97);
+  color: var(--text-main);
+  box-shadow: 0 2px 8px rgba(43, 38, 34, 0.1), inset 0 0 0 1px var(--hairline);
   font: 12px/1.5 var(--sans-stack);
   pointer-events: none;
 }
