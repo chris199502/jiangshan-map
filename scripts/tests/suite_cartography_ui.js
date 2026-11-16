@@ -92,9 +92,13 @@ async function runCartographyUiSuite(ctx) {
     }
 
     const maShanLinkMatch = indexHtml.match(
-      /<link href="(https:\/\/fonts\.googleapis\.com\/css2\?family=Ma\+Shan\+Zheng&text=([^"&]+)&display=swap)" rel="stylesheet" \/>/
+      /<link href="(https:\/\/fonts\.googleapis\.com\/css2\?family=Ma\+Shan\+Zheng&text=([^"&]+)&display=swap)" rel="stylesheet" media="print" onload="this\.media='all'" \/>/
     );
-    assert(maShanLinkMatch, 'Expected synchronous subsetted Ma Shan Zheng stylesheet <link> in index.html');
+    assert(maShanLinkMatch, 'Expected non-blocking subsetted Ma Shan Zheng stylesheet <link> in index.html');
+    assert(
+      !/<link href="https:\/\/fonts\.googleapis\.com[^>]*rel="stylesheet" \/>/.test(indexHtml),
+      'Google Fonts stylesheets must not block rendering (media="print" + onload): the host is unreachable for some readers'
+    );
     const subsetChars = new Set(decodeURIComponent(maShanLinkMatch[2]));
     const requiredCalligraphyChars = [
       '江山时序',
@@ -373,8 +377,8 @@ async function runCartographyUiSuite(ctx) {
       // 1) Dunhuang ([94.66, 40.14]) & Yangguan ([94.13, 39.93]) inside Hexi / regular prefectures (25-880 CE)
       for (const [sk, title] of [
         ['s_donghan_a', '东汉'],
-        ['s_donghan_d1', '马腾(凉州)'],
-        ['s_donghan_f', '曹操(北方)'],
+        ['s_donghan_d1', '马腾（凉州）'],
+        ['s_donghan_f', '曹操（北方）'],
         ['s_sanguo', '魏'],
         ['s_xijin_a', '晋'],
         ['s_dongjin_a', '前凉'],
@@ -399,7 +403,7 @@ async function runCartographyUiSuite(ctx) {
       }
       // 2) Post-215 CE Hetao & Alashan contraction (Jian'an 20): Jiuyuan/Wuyuan ([108.27, 41.10]), Shengle ([111.82, 40.48]), Alashan ([105.60, 39.50]), & Gobi north of Yinshan ([108.50, 42.00]) in Xianbei; Zhongwei ([105.19, 37.51]) & Xinzhou ([112.73, 38.42]) kept
       for (const [sk, coreTitle] of [
-        ['s_donghan_e', '曹操(北方)'],
+        ['s_donghan_e', '曹操（北方）'],
         ['s_sanguo', '魏'],
         ['s_xijin_a', '晋'],
       ]) {
@@ -438,7 +442,7 @@ async function runCartographyUiSuite(ctx) {
       }
       assert(
         hasPolAt('s_sui_c', '隋', 93.51, 42.82) &&
-          hasPolAt('s_sui_c', '西海·鄯善等四郡', 99.82, 36.85) &&
+          hasPolAt('s_sui_c', '西海、鄯善等四郡', 99.82, 36.85) &&
           hasPolAt('s_sui_c', '吐谷浑', 99.2, 34.1) &&
           !hasPolAt('s_sui_c', '吐谷浑', 92.0, 34.0),
         's_sui_c (609-618 CE): Hami must belong to 隋, Qinghai Lake to 西海·鄯善等四郡, and Fuyun remnant to southeastern Bayan Har / Hequ ([99.2, 34.1])'
@@ -497,9 +501,9 @@ async function runCartographyUiSuite(ctx) {
         ['s_donghan_b2', '东汉', '北匈奴'],
         ['s_donghan_c', '东汉', '北匈奴'],
         ['s_donghan', '东汉', '鲜卑'],
-        ['s_donghan_d1', '马腾(凉州)', '鲜卑'],
-        ['s_donghan_d2', '马腾·韩遂(关陇)', '鲜卑'],
-        ['s_donghan_e1', '曹操(北方)', '鲜卑'],
+        ['s_donghan_d1', '马腾（凉州）', '鲜卑'],
+        ['s_donghan_d2', '马腾 · 韩遂（关陇）', '鲜卑'],
+        ['s_donghan_e1', '曹操（北方）', '鲜卑'],
       ]) {
         assert(
           hasPolAt(sk, hexiPol, 101.05, 41.95) &&
@@ -610,7 +614,7 @@ async function runCartographyUiSuite(ctx) {
       }
       // De-provincialize modern Gansu Mazongshan ([96.80, 41.80]) & modern Minqin-Tengger spike ([103.90, 39.30]) across Han–Five Dynasties + Ming
       const deProvCoreSet = new Set([
-        '汉（郡国并行）', '汉', '新（王莽）', '隗嚣 · 窦融', '东汉', '马腾(凉州)', '马腾·韩遂(关陇)', '曹操(北方)',
+        '汉（郡国并行）', '汉', '新（王莽）', '隗嚣 · 窦融', '东汉', '马腾（凉州）', '马腾 · 韩遂（关陇）', '曹操（北方）',
         '魏', '晋', '汉赵', '前赵', '后赵', '前凉', '前秦（苻氏）', '前秦', '后凉', '西凉', '北凉',
         '北魏', '西魏', '北周', '隋', '凉（李轨）', '唐', '武周', '吐蕃', '归义军（张议潮）',
         '沙州归义军', '甘州回鹘', '凉州（六谷部）', '明', '哈密卫（关西七卫）', '大顺（李自成）',
@@ -858,7 +862,7 @@ async function runCartographyUiSuite(ctx) {
     }
 
     // Tang 29 map change milestones
-    const expectedTangMapChanges = [618, 621, 630, 635, 640, 648, 657, 663, 668, 670, 676, 679, 686, 690, 692, 698, 702, 705, 713, 738, 755, 757, 763, 764, 790, 848, 881, 885, 907];
+    const expectedTangMapChanges = [618, 621, 630, 635, 640, 648, 657, 663, 668, 670, 676, 679, 686, 690, 692, 698, 702, 705, 713, 738, 755, 757, 763, 764, 790, 840, 848, 881, 885, 907];
     const actualTangMapChanges = (tangDyn.milestones || []).filter((m) => m.isMapChange).map((m) => m.year);
     assert.strictEqual(
       JSON.stringify(actualTangMapChanges),
@@ -1133,18 +1137,18 @@ async function runCartographyUiSuite(ctx) {
     const sanguoSpotChecks = [
       [{ lng: 118.801, lat: 32.061, year: 229 }, '吴'], // Jianye
       [{ lng: 119.451, lat: 32.201, year: 229 }, '吴'], // Jingkou
-      [{ lng: 112.121, lat: 32.011, year: 208 }, '曹操(北方)'], // Xiangyang post-208
+      [{ lng: 112.121, lat: 32.011, year: 208 }, '曹操（北方）'], // Xiangyang post-208
       [{ lng: 112.121, lat: 32.011, year: 229 }, '魏'], // Xiangyang in Three Kingdoms
-      [{ lng: 123.171, lat: 41.271, year: 196 }, '公孙氏(辽东)'], // Xiangping (Liaodong)
-      [{ lng: 113.261, lat: 23.131, year: 200 }, '士燮(交州)'], // Panyu (Jiaozhou) 189-210
-      [{ lng: 113.261, lat: 23.131, year: 211 }, '孙权(江东)'], // Panyu submits to Sun Quan 211
-      [{ lng: 103.82, lat: 36.06, year: 208 }, '马腾·韩遂(关陇)'], // Guanlong before Tong Pass
-      [{ lng: 103.82, lat: 36.06, year: 211 }, '曹操(北方)'], // Guanlong after Tong Pass (211)
-      [{ lng: 107.021, lat: 33.071, year: 200 }, '张鲁(汉中)'], // Nanzheng (Hanzhong) 196-214
-      [{ lng: 107.021, lat: 33.071, year: 215 }, '曹操(北方)'], // Hanzhong taken by Cao Cao (215)
-      [{ lng: 107.021, lat: 33.071, year: 219 }, '刘备(益州)'], // Hanzhong taken by Liu Bei (219)
-      [{ lng: 111.698, lat: 29.032, year: 215 }, '刘备(荆益)'], // Wuling west of Xiang River (215)
-      [{ lng: 112.941, lat: 28.231, year: 215 }, '孙权(江东)'], // Changsha east of Xiang River (215)
+      [{ lng: 123.171, lat: 41.271, year: 196 }, '公孙氏（辽东）'], // Xiangping (Liaodong)
+      [{ lng: 113.261, lat: 23.131, year: 200 }, '士燮（交州）'], // Panyu (Jiaozhou) 189-210
+      [{ lng: 113.261, lat: 23.131, year: 211 }, '孙权（江东）'], // Panyu submits to Sun Quan 211
+      [{ lng: 103.82, lat: 36.06, year: 208 }, '马腾 · 韩遂（关陇）'], // Guanlong before Tong Pass
+      [{ lng: 103.82, lat: 36.06, year: 211 }, '曹操（北方）'], // Guanlong after Tong Pass (211)
+      [{ lng: 107.021, lat: 33.071, year: 200 }, '张鲁（汉中）'], // Nanzheng (Hanzhong) 196-214
+      [{ lng: 107.021, lat: 33.071, year: 215 }, '曹操（北方）'], // Hanzhong taken by Cao Cao (215)
+      [{ lng: 107.021, lat: 33.071, year: 219 }, '刘备（益州）'], // Hanzhong taken by Liu Bei (219)
+      [{ lng: 111.698, lat: 29.032, year: 215 }, '刘备（荆益）'], // Wuling west of Xiang River (215)
+      [{ lng: 112.941, lat: 28.231, year: 215 }, '孙权（江东）'], // Changsha east of Xiang River (215)
     ];
     for (const [opts, expPol] of sanguoSpotChecks) {
       const info = ctrl.inspect(opts);
@@ -1886,6 +1890,272 @@ async function runCartographyUiSuite(ctx) {
       !qinlingNode.classList.contains('is-crowded-hidden'),
       '秦岭 must reappear after zooming back in past the pass gate (zoomOnly frame)'
     );
+
+    // CUJ 31c: Polity and region captions sit in dedicated SVG label groups above rivers/borders/corridors
+    const idxPref = indexHtml.indexOf('<g id="grp-prefectures"></g>');
+    const idxRiv = indexHtml.indexOf('<g id="grp-rivers"></g>');
+    const idxCorr = indexHtml.indexOf('<g id="grp-corridors"></g>');
+    const idxProvNames = indexHtml.indexOf('<g id="grp-prov-names"');
+    const idxRegLbl = indexHtml.indexOf('<g id="grp-region-labels"></g>');
+    const idxPolLbl = indexHtml.indexOf('<g id="grp-polity-labels"></g>');
+    const idxSettle = indexHtml.indexOf('<g id="grp-settlements"></g>');
+    assert(
+      idxPref > 0 &&
+        idxRiv > idxPref &&
+        idxCorr > idxRiv &&
+        idxProvNames > idxCorr &&
+        idxRegLbl > idxProvNames &&
+        idxPolLbl > idxRegLbl &&
+        idxSettle > idxPolLbl,
+      'index.html must order #grp-region-labels and #grp-polity-labels above borders/rivers/corridors and below #grp-settlements'
+    );
+    assert(
+      styleCss.includes('#grp-polity-labels.is-hidden') &&
+        styleCss.includes('#grp-region-labels.is-hidden') &&
+        styleCss.includes('#grp-polity-labels.has-polity-focus .polity-caption:not(.is-focused)') &&
+        styleCss.includes('#atlas-svg.is-awaiting-snapshot #grp-polity-labels') &&
+        styleCss.includes('#atlas-svg.is-awaiting-snapshot #grp-region-labels'),
+      'css/style.css must synchronize hidden, snapshot-awaiting, and focus styles on #grp-polity-labels and #grp-region-labels'
+    );
+    const fakeNode = (tag, attrs = {}) => {
+      const cls = new Set(String(attrs.class || '').split(/\s+/).filter(Boolean));
+      const children = [];
+      const el = {
+        tagName: tag,
+        attributes: { ...attrs },
+        dataset: {},
+        children,
+        textContent: '',
+        classList: {
+          add: (...c) => c.forEach((x) => cls.add(x)),
+          remove: (...c) => c.forEach((x) => cls.delete(x)),
+          toggle: (x, force) => (force === undefined ? (cls.has(x) ? cls.delete(x) : cls.add(x)) : force ? cls.add(x) : cls.delete(x)),
+          contains: (x) => cls.has(x),
+        },
+        setAttribute: (k, v) => {
+          el.attributes[k] = String(v);
+          if (k === 'class') {
+            cls.clear();
+            String(v).split(/\s+/).filter(Boolean).forEach((x) => cls.add(x));
+          }
+        },
+        getAttribute: (k) => (k in el.attributes ? el.attributes[k] : null),
+        appendChild: (c) => {
+          c.parentNode = el;
+          children.push(c);
+          return c;
+        },
+        querySelectorAll: (sel) => {
+          const want = sel.split(',').map((s) => s.trim().replace(/^\./, ''));
+          const out = [];
+          const walk = (n) => {
+            for (const ch of n.children || []) {
+              if (want.some((w) => ch.classList && ch.classList.contains(w))) out.push(ch);
+              walk(ch);
+            }
+          };
+          walk(el);
+          return out;
+        },
+      };
+      return el;
+    };
+    const mockGrpPol = fakeNode('g');
+    const mockGrpPolLbl = fakeNode('g');
+    const mockGrpPref = fakeNode('g');
+    const mockGrpRegLbl = fakeNode('g');
+    const zCtrl = Object.create(proto);
+    Object.assign(zCtrl, {
+      locale: 'zh',
+      year: 317,
+      projector: ctrl.projector,
+      svg: fakeNode('svg'),
+      mapKey: fakeNode('div'),
+      grpPolities: mockGrpPol,
+      grpPolityLabels: mockGrpPolLbl,
+      grpPrefectures: mockGrpPref,
+      grpRegionLabels: mockGrpRegLbl,
+      prefClipPath: fakeNode('path'),
+      _svgNode: (tag, attrs, parent) => {
+        const n = fakeNode(tag, attrs);
+        if (parent) parent.appendChild(n);
+        return n;
+      },
+      _mapText: (s) => s,
+      trTerm: (s) => s,
+      _zh: (s) => s,
+      _clearHoveredPrefecture: () => {},
+      _buildPrefectureBoundaryPath: () => '',
+      _buildRegionBoundaryPath: () => '',
+      _renderLegendBox: () => {},
+      _syncTracedPrefecture: () => {},
+      _rescaleSvgTypography: () => {},
+    });
+    const fakeSnap = {
+      polities: [
+        {
+          title: '东晋',
+          role: 'main',
+          tint: '#6b9e78',
+          anchor: [115.0, 29.5],
+          shape: { type: 'Polygon', coordinates: [[[110, 25], [120, 25], [120, 33], [110, 33], [110, 25]]] },
+        },
+        {
+          title: '汉赵',
+          role: 'rival',
+          tint: '#b87664',
+          anchor: [111.5, 36.5],
+          shape: { type: 'Polygon', coordinates: [[[106, 34], [116, 34], [116, 40], [106, 40], [106, 34]]] },
+        },
+      ],
+      regions: [
+        {
+          title: '司州',
+          category: '州',
+          anchor: [113.0, 35.0],
+          shape: { type: 'Polygon', coordinates: [[[110, 34], [115, 34], [115, 37], [110, 37], [110, 34]]] },
+        },
+      ],
+      prefectures: [],
+    };
+    zCtrl._renderPolitiesAndPrefectures(dynasties[0], fakeSnap);
+    assert.strictEqual(mockGrpPol.querySelectorAll('.polity-caption').length, 0, 'polity captions must not sit inside #grp-polities');
+    assert.strictEqual(mockGrpPolLbl.querySelectorAll('.polity-caption').length, 2, 'polity captions must render inside #grp-polity-labels');
+    assert.strictEqual(mockGrpPref.querySelectorAll('.region-caption').length, 0, 'region captions must not sit inside #grp-prefectures');
+    assert.strictEqual(mockGrpRegLbl.querySelectorAll('.region-caption').length, 1, 'region captions must render inside #grp-region-labels');
+    zCtrl._setPolityFocus('东晋');
+    assert(
+      mockGrpPol.classList.contains('has-polity-focus') &&
+        mockGrpPolLbl.classList.contains('has-polity-focus') &&
+        mockGrpPolLbl.children[0].classList.contains('is-focused') &&
+        !mockGrpPolLbl.children[1].classList.contains('is-focused'),
+      '_setPolityFocus must highlight matching .polity-caption inside #grp-polity-labels'
+    );
+
+    // CUJ 31d: Progressive Tier-2 prefecture density — spacious at mid-zoom, monotonically unlocked across zoomOnly frames, 100% visible at deep zoom (desktop & mobile)
+    const tangActive = (tangDyn.settlements || []).filter(
+      (s) => (s.appear === undefined || 787 >= s.appear) && (s.vanish === undefined || 787 < s.vanish)
+    );
+    const makeTangSettlementNodes = () =>
+      tangActive.map((item) => {
+        const [sx, sy] = ctrl.projector.toScreen(item.coord[0], item.coord[1]);
+        const isCap = Boolean(item.isCapital);
+        const isT2 = !isCap && item.tier === 2;
+        const nameEl = {
+          textContent: item.ancient,
+          attrs: {},
+          setAttribute(k, v) {
+            this.attrs[k] = String(v);
+          },
+          getAttribute(k) {
+            return this.attrs[k] || null;
+          },
+        };
+        const cls = makeCls(['settlement-node', ...(isCap ? ['is-capital'] : isT2 ? ['is-tier2'] : [])]);
+        const attrs = { 'data-x': sx.toFixed(1), 'data-y': sy.toFixed(1) };
+        return {
+          _item: item,
+          classList: cls,
+          dataset: {
+            tier: isCap ? '0' : isT2 ? '2' : '1',
+            remark: item.remark || '',
+            prefAlign: item.align || 'r',
+            ...(item.align ? { explicitAlign: '1' } : {}),
+            lng: String(item.coord[0]),
+            lat: String(item.coord[1]),
+          },
+          getAttribute: (k) => (k in attrs ? attrs[k] : null),
+          setAttribute: (k, v) => {
+            attrs[k] = String(v);
+          },
+          querySelector: (sel) => (sel === '.name' ? nameEl : null),
+        };
+      });
+    const tangNodes = makeTangSettlementNodes();
+    const jnT2Nodes = tangNodes.filter(
+      (n) =>
+        n.classList.contains('is-tier2') &&
+        n._item.coord[0] >= 115 &&
+        n._item.coord[0] <= 122.5 &&
+        n._item.coord[1] >= 27.5 &&
+        n._item.coord[1] <= 33.2
+    );
+    const [jndX, jndY] = ctrl.projector.toScreen(120.2, 29.8);
+    const jndRegion = makeCaptionNode(['region-caption'], '江南东道', jndX, jndY, {});
+    const progCtrl = {
+      ...mockCtrl,
+      camera: { x: 280, y: 200, w: 1000 / 2.35, h: 700 / 2.35, zoom: 2.35 },
+      svg: {
+        classList: makeCls(),
+        querySelectorAll: (sel) =>
+          sel === '.settlement-node'
+            ? tangNodes
+            : sel === '.region-caption'
+              ? [jndRegion]
+              : [],
+      },
+      grpPolities: { classList: makeCls(), querySelectorAll: () => [] },
+      grpNeighbors: { querySelectorAll: () => [] },
+    };
+    proto._rescaleSvgTypography.call(progCtrl);
+    const visAt235 = jnT2Nodes.filter((n) => !n.classList.contains('is-label-crowded')).length;
+    assert(
+      visAt235 >= 5 && visAt235 <= Math.floor(jnT2Nodes.length * 0.65),
+      `Mid-zoom (z=2.35) must thin dense Jiangnan Tier-2 labels for breathing room (got ${visAt235}/${jnT2Nodes.length})`
+    );
+    assert(
+      !jndRegion.classList.contains('is-crowded-hidden'),
+      'Macro-region caption 江南东道 must settle before minor Tier-2 prefectures and remain visible at z=2.35'
+    );
+    for (const majorSeat of ['魏州', '青州', '苏州', '杭州', '洪州', '潭州']) {
+      const seatNode = tangNodes.find((n) => n._item.ancient === majorSeat);
+      assert(
+        seatNode && !seatNode.classList.contains('is-label-crowded'),
+        `Circuit/jiedushi seat ${majorSeat} must win priority at mid-zoom z=2.35`
+      );
+    }
+    // Zooming in via zoomOnly frames must progressively unlock crowded Tier-2 labels up to 100%
+    progCtrl.camera = { x: 350, y: 240, w: 1000 / 3.6, h: 700 / 3.6, zoom: 3.6 };
+    proto._rescaleSvgTypography.call(progCtrl, { zoomOnly: true });
+    const visAt36 = jnT2Nodes.filter((n) => !n.classList.contains('is-label-crowded')).length;
+    progCtrl.camera = { x: 420, y: 280, w: 1000 / 12, h: 700 / 12, zoom: 12 };
+    proto._rescaleSvgTypography.call(progCtrl, { zoomOnly: true });
+    const allT2Nodes = tangNodes.filter((n) => n.classList.contains('is-tier2'));
+    const visAt12 = allT2Nodes.filter((n) => !n.classList.contains('is-label-crowded')).length;
+    assert(
+      visAt36 > visAt235 && visAt12 === allT2Nodes.length,
+      `Zooming in via zoomOnly must monotonically reveal Tier-2 labels up to 100% at z=12 (${visAt235} -> ${visAt36} -> ${visAt12}/${allT2Nodes.length})`
+    );
+    // Narrow mobile viewport (390px) compatibility: thinned at z=3.5, 100% revealed at deep pinch zoom (z=18, w=55.6)
+    const prevInnerW = sandbox.window.innerWidth;
+    try {
+      sandbox.window.innerWidth = 390;
+      const mobNodes = makeTangSettlementNodes();
+      const mobCtrl = {
+        ...progCtrl,
+        _lastTypographyWidth: undefined,
+        _lastViewportWidth: undefined,
+        _lastZoomStateKey: undefined,
+        _lastTier2Bucket: undefined,
+        camera: { x: 320, y: 220, w: 1000 / 3.5, h: 700 / 3.5, zoom: 3.5 },
+        svg: {
+          classList: makeCls(),
+          querySelectorAll: (sel) => (sel === '.settlement-node' ? mobNodes : []),
+        },
+      };
+      proto._rescaleSvgTypography.call(mobCtrl);
+      const mobT2 = mobNodes.filter((n) => n.classList.contains('is-tier2'));
+      const mobMid = mobT2.filter((n) => !n.classList.contains('is-label-crowded')).length;
+      mobCtrl.camera = { x: 420, y: 280, w: 1000 / 18, h: 700 / 18, zoom: 18 };
+      proto._rescaleSvgTypography.call(mobCtrl, { zoomOnly: true });
+      const mobDeep = mobT2.filter((n) => !n.classList.contains('is-label-crowded')).length;
+      assert(
+        mobMid < mobT2.length && mobDeep === mobT2.length,
+        `Narrow mobile (390px) must thin Tier-2 labels at z=3.5 (${mobMid}/${mobT2.length}) and reveal 100% at z=18 (${mobDeep}/${mobT2.length})`
+      );
+    } finally {
+      sandbox.window.innerWidth = prevInnerW;
+    }
   }
 
   // CUJ 32: Timeline & Person Chronicle Playback Speed Control (1x -> 2x -> 0.25x -> 0.5x -> 1x)
@@ -2137,6 +2407,24 @@ async function runCartographyUiSuite(ctx) {
         snapshots.s_xihan_c.polities.some((p) => p.title === '西域都护府' && p.role === 'protectorate'),
       'Protectorate of the Western Regions (西域都护府) must not appear before -60 BCE (s_xihan_c)'
     );
+    // Eastern Han: Protector-General 91–107, withdrawn 107–123, Chief Clerk (西域长史) from 123.
+    const xiyuRole = (sk, title) => (snapshots[sk].polities.find((p) => p.title === title) || {}).role;
+    assert(
+      xiyuRole('s_donghan', '西域都护府') === 'protectorate' &&
+        xiyuRole('s_donghan_107', '西域诸国（役属北匈奴）') === 'neighbor' &&
+        !snapshots.s_donghan_107.polities.some((p) => /都护|长史/.test(p.title)) &&
+        xiyuRole('s_donghan_123', '西域长史府') === 'protectorate' &&
+        !snapshots.s_donghan_123.polities.some((p) => p.title === '西域都护府'),
+      'Eastern Han Western Regions: 西域都护府 in 91–107, 西域诸国（役属北匈奴） in 107–123, 西域长史府 from 123'
+    );
+    // Uyghur Khaganate falls in 840: Ordu-Baliq [102.66, 47.43] passes to 黠戛斯; 回鹘 survives west of the Altai.
+    assert(hasPt('s_tang_b', '回鹘', 102.66, 47.43), 's_tang_b (790–840): Ordu-Baliq must still be 回鹘');
+    for (const sk of ['s_tang_840', 's_tang_c', 's_tang_d1', 's_tang_d2']) {
+      assert(
+        hasPt(sk, '黠戛斯', 102.66, 47.43) && !hasPt(sk, '回鹘', 102.66, 47.43) && hasPt(sk, '回鹘', 86.0, 48.0),
+        `${sk}: after 840 Ordu-Baliq must belong to 黠戛斯 and 回鹘 must remain only west of the Altai`
+      );
+    }
     assert(
       !hasPt('s_xihan_b3', '汉', 125.751, 39.031) &&
         hasPt('s_xihan_b', '汉', 125.751, 39.031) &&
@@ -2392,6 +2680,104 @@ async function runCartographyUiSuite(ctx) {
         hasPolPt('s_yuan_c', '元', 109.577, 19.521),
       's_yuan_c must keep Zhou (Zhang Shicheng) and Fang Guozhen until 1367 and restrict Chen Youding strictly to Fujian while Guangdong/Guangxi/Hainan stay in Yuan'
     );
+    // Five Dynasties: Guizhou is not Chu's; 桂管 (Guilin, Liuzhou, Wuzhou, Lianzhou) is Chu's until 951, Nan Han's afterwards.
+    for (const sk of ['s_wudai_a', 's_wudai_b', 's_wudai_c', 's_wudai_d']) {
+      assert(
+        hasPolPt(sk, '楚（马楚）', 110.29, 25.27) &&
+          hasPolPt(sk, '楚（马楚）', 109.4, 24.3) &&
+          hasPolPt(sk, '楚（马楚）', 111.3, 23.48) &&
+          hasPolPt(sk, '楚（马楚）', 112.38, 24.78) &&
+          hasPolPt(sk, '南汉', 108.3, 22.8) &&
+          hasPolPt(sk, '南汉', 111.5, 23.43) &&
+          hasPolPt(sk, '黔中诸部（羁縻）', 106.7, 26.6) &&
+          !hasPolPt(sk, '楚（马楚）', 106.9, 27.7),
+        `${sk}: 桂管 must be 楚, Yongzhou and Fengzhou 南汉, and Guizhou outside 楚`
+      );
+    }
+    for (const sk of ['s_wudai_e', 's_wudai_e2']) {
+      assert(
+        hasPolPt(sk, '南汉', 110.29, 25.27) &&
+          hasPolPt(sk, '武平（湖南）', 112.94, 28.2) &&
+          hasPolPt(sk, '黔中诸部（羁縻）', 106.7, 26.6),
+        `${sk}: after 951 Guilin is 南汉 and Guizhou is outside 武平`
+      );
+    }
+    // 荆南 (江陵, 峡, 归) is its own state and 施州 is Shu's; 鄂州 is Wu / Southern Tang's, and so are 黄 and 蕲 until 958.
+    for (const [sk, south] of [['s_wudai_a', '吴'], ['s_wudai_c', '南唐'], ['s_wudai_e', '南唐']]) {
+      assert(
+        hasPolPt(sk, '荆南（南平）', 112.2, 30.35) &&
+          hasPolPt(sk, '荆南（南平）', 110.75, 30.95) &&
+          !hasPolPt(sk, '荆南（南平）', 109.48, 30.3) &&
+          hasPolPt(sk, south, 114.3, 30.55) &&
+          hasPolPt(sk, south, 114.87, 30.45) &&
+          hasPolPt(sk, south, 115.43, 30.23),
+        `${sk}: Jiangling and Guizhou (秭归) must be 荆南, Shizhou not; Ezhou, Huangzhou and Qizhou must be ${south}`
+      );
+    }
+    // 大宁 (宁城) is 明 under the 大宁都司 in 1388-1407, and outside 明 again in 1616-1644 as in 1449-1616.
+    assert(
+      hasPolPt('s_ming_a0', '明', 119.0, 41.6) &&
+        !hasPolPt('s_ming_a0', '北元（鞑靼 · 瓦剌）', 119.0, 41.6) &&
+        !hasPolPt('s_ming_b', '明', 119.0, 41.6) &&
+        !hasPolPt('s_ming_c0', '明', 119.0, 41.6) &&
+        !hasPolPt('s_ming_c2', '明', 119.0, 41.6),
+      '大宁 must be 明 in 1388-1407 and outside 明 in 1449-1644'
+    );
+    // Neighbour names must fit the snapshot's years.
+    for (const [sk, has, lacks] of [
+      ['s_zhanguo_a', '波斯（阿契美尼德）', '安息'],
+      ['s_sanguo', '萨珊波斯', '安息'],
+      ['s_nanbei_e', '突厥', '柔然'],
+      ['s_tang_a5', '倭马亚王朝（大食）', '萨珊波斯'],
+      ['s_tang_b', '室利佛逝', '三佛齐'],
+      ['s_wudai_c', '高丽', '新罗'],
+      ['s_wudai_c', '日本（平安）', '大和（日本）'],
+      ['s_nansong_e', '日本（镰仓幕府）', '日本（平安）'],
+      ['s_ming_0c', '高丽', '朝鲜'],
+      ['s_ming_a', '日本（室町幕府）', '萨法维波斯'],
+      ['s_ming_c', '日本（江户幕府）', '日本（战国）'],
+      ['s_qing_g', '大韩帝国', '朝鲜'],
+    ]) {
+      const titles = snapshots[sk].polities.map((p) => p.title);
+      assert(titles.includes(has) && !titles.includes(lacks), `${sk}: expected neighbour ${has}, not ${lacks}`);
+    }
+    // 秦/凤/阶/成 are 后蜀's in 947-955 and 后周's from 955; 泉/漳 form 清源军 from 947.
+    for (const sk of ['s_wudai_d', 's_wudai_e']) {
+      assert(
+        hasPolPt(sk, '后蜀', 105.72, 34.58) && hasPolPt(sk, '后蜀', 106.52, 33.91) && hasPolPt(sk, '后蜀', 104.93, 33.4),
+        `${sk}: Qinzhou, Fengzhou and Jiezhou must be 后蜀 in 947-955`
+      );
+    }
+    assert(hasPolPt('s_wudai_955', '后周', 105.72, 34.58) && !hasPolPt('s_wudai_955', '后蜀', 106.52, 33.91), 's_wudai_955: Qin and Feng must be 后周');
+    for (const sk of ['s_wudai_d', 's_wudai_e', 's_wudai_955', 's_wudai_e1', 's_wudai_e2']) {
+      assert(
+        hasPolPt(sk, '清源军', 118.6, 24.9) && hasPolPt(sk, '清源军', 117.65, 24.5) && !hasPolPt(sk, '南唐', 118.6, 24.9),
+        `${sk}: Quanzhou and Zhangzhou must be 清源军, not 南唐`
+      );
+    }
+    assert(
+      hasPolPt('s_wudai_e1', '南唐', 114.3, 30.55) && hasPolPt('s_wudai_e1', '后周', 114.87, 30.45),
+      's_wudai_e1 (958): Ezhou stays 南唐 while Huangzhou passes to 后周'
+    );
+    // 1367: Zhang Shicheng and Fang Guozhen are absorbed by 吴（朱元璋）; 1335 on: Kamakura and the Ilkhanate are gone.
+    const yuanTitles = (sk) => snapshots[sk].polities.map((p) => p.title);
+    assert(
+      hasPolPt('s_yuan_1367', '吴（朱元璋）', 120.62, 31.3) &&
+        hasPolPt('s_yuan_1367', '吴（朱元璋）', 121.55, 29.87) &&
+        !yuanTitles('s_yuan_1367').includes('周（张士诚）') &&
+        !yuanTitles('s_yuan_1367').includes('方国珍') &&
+        yuanTitles('s_yuan_1367').includes('明夏（明升）'),
+      's_yuan_1367: Pingjiang and Qingyuan must be 吴（朱元璋）, with no 周 / 方国珍 polity and 明夏 under 明升'
+    );
+    for (const sk of ['s_yuan_1335', 's_yuan_b', 's_yuan_c', 's_yuan_1367']) {
+      assert(
+        yuanTitles(sk).includes('日本（南北朝）') &&
+          !yuanTitles(sk).includes('日本（镰仓幕府）') &&
+          !yuanTitles(sk).includes('伊利汗国') &&
+          !yuanTitles(sk).includes('蒲甘'),
+        `${sk}: after 1335 the map must not show Kamakura Japan, the Ilkhanate or Pagan`
+      );
+    }
 
     // 5. Mongol Empire & Western Liao / Yuan interior continuity (zero Lop Nor / Qilian hollow cavities or vertical keyhole cuts)
     assert(
@@ -2675,6 +3061,14 @@ async function runCartographyUiSuite(ctx) {
           hasPolPt(sk, '楚', 107.021, 33.071) &&
           !hasPolPt(sk, '楚', 105.84, 32.44),
         `${sk} must split 蜀 (Chengdu, Jiameng) and 巴 (Jiangzhou, Langzhong) and keep Hanzhong in 楚 without overlapping Jiameng`
+      );
+      // The 巴|蜀 border follows the Fu–Jialing divide: 蜀's Jinniu road (梓潼) and 僰道 stay in 蜀; 遂宁 and 泸州 are 巴.
+      assert(
+        hasPolPt(sk, '蜀', 105.17, 31.64) &&
+          hasPolPt(sk, '蜀', 104.63, 28.77) &&
+          hasPolPt(sk, '巴', 105.57, 30.5) &&
+          hasPolPt(sk, '巴', 105.44, 28.87),
+        `${sk}: Zitong and Bodao must be 蜀; Suining and Luzhou must be 巴`
       );
     }
     assert(

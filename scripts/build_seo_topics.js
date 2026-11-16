@@ -81,6 +81,7 @@ function loadAtlasRuntime() {
     'lore_core.js',
     'lore_detail.js',
     'i18n_dict.js',
+    'zh_hant.js',
     ...CONTROLLER_SCRIPTS.map((rel) => path.basename(rel)),
   ]) {
     const code = fs.readFileSync(path.join(JS_DIR, file), 'utf8');
@@ -1518,11 +1519,14 @@ function updateIndexHtmlSeoDirectory(dynMeta, journeyMeta, featuredMeta, dynasti
   const indexPath = path.join(ROOT, 'index.html');
   let html = fs.readFileSync(indexPath, 'utf8');
 
-  // 1. Subset Ma Shan Zheng calligraphy webfont to the exact characters rendered in #txt-seal and #dynasty-title (zero FOUT)
+  // 1. Subset Ma Shan Zheng calligraphy webfont to the exact characters rendered in #txt-seal and #dynasty-title
+  //    (a few KB). Both font stylesheets load without blocking rendering; the fallback faces show until they arrive.
   const calligraphyChars = computeCalligraphySubsetText(dynasties, enLocale);
   const encodedCalligraphy = encodeURIComponent(calligraphyChars).replace(/'/g, '%27');
-  const fontLinksBlock = `  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=Noto+Sans+SC:wght@400;500&display=swap" rel="stylesheet" />\n  <link href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&text=${encodedCalligraphy}&display=swap" rel="stylesheet" />`;
-  const fontRegex = /  <link href="https:\/\/fonts\.googleapis\.com\/css2\?family=Noto\+Serif\+SC[^"]*" rel="stylesheet" \/>(?:\r?\n  <link href="https:\/\/fonts\.googleapis\.com\/css2\?family=Ma\+Shan\+Zheng[^"]*" rel="stylesheet" \/>)?/;
+  // media="print" + onload keeps the webfont stylesheets from blocking first paint.
+  const NON_BLOCKING = ` rel="stylesheet" media="print" onload="this.media='all'" />`;
+  const fontLinksBlock = `  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=Noto+Sans+SC:wght@400;500&display=swap"${NON_BLOCKING}\n  <link href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&text=${encodedCalligraphy}&display=swap"${NON_BLOCKING}`;
+  const fontRegex = /  <link href="https:\/\/fonts\.googleapis\.com\/css2\?family=Noto\+Serif\+SC[^"]*" rel="stylesheet"[^>]*\/>(?:\r?\n  <link href="https:\/\/fonts\.googleapis\.com\/css2\?family=Ma\+Shan\+Zheng[^"]*" rel="stylesheet"[^>]*\/>)?/;
   if (!fontRegex.test(html)) {
     throw new Error('Could not find Google Fonts stylesheet link block in index.html');
   }

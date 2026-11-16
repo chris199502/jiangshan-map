@@ -1648,7 +1648,7 @@
     // loosest and the first rule that matches anything decides, so an exact name always wins:
     // the English name as displayed; the same name ignoring spacing and punctuation
     // ("Jiangzhou" for "Jiang Zhou"); the name without its administrative suffix ("Yingtian
-    // Prefecture" or "Yingtian Fu" for "Yingtian Pref."); then the Chinese name without its
+    // Prefecture" or "Yingtian Pref." for "Yingtian Fu"); then the Chinese name without its
     // suffix ("应天" for "应天府"). Toneless pinyin is ambiguous (绛州 and 江州 are both
     // "Jiang Zhou" in 1102), so several indices can come back; the caller picks by location.
     _matchPrefectureNames(query, zhTitles) {
@@ -1705,11 +1705,16 @@
       const afterFullSnapshots = (fn, delayMs = 80) => {
         const run = () => setTimeout(fn, delayMs);
         const tasks = [];
-        if (!this._fullSnapshotsLoaded && typeof window !== 'undefined') {
-          tasks.push(this._ensureFullSnapshots());
-        }
+        const snapshotsReady =
+          !this._fullSnapshotsLoaded && typeof window !== 'undefined' ? this._ensureFullSnapshots() : null;
+        if (snapshotsReady) tasks.push(snapshotsReady);
         if (!this._isLoreDetailLoaded() && typeof window !== 'undefined') {
-          tasks.push(this._ensureLoreDetail());
+          // A plain ?year= link shows nothing from the lore bundle: let the borders download first.
+          const bordersFirst =
+            snapshotsReady &&
+            this._deferredLoadsHeld &&
+            !['q', 'person', 'event', 'journey', 'trace', 'hover', 'place', 'lng'].some((k) => q.has(k));
+          tasks.push(bordersFirst ? snapshotsReady.then(() => this._ensureLoreDetail()) : this._ensureLoreDetail());
         }
         if (needsEn && typeof window !== 'undefined' && !this._hasEnDict()) {
           tasks.push(this._ensureEnglishLocale());
@@ -1836,6 +1841,9 @@
             if (prefChk) prefChk.checked = true;
             if (this.grpPrefectures && this.grpPrefectures.classList) {
               this.grpPrefectures.classList.remove('is-hidden');
+            }
+            if (this.grpRegionLabels && this.grpRegionLabels.classList) {
+              this.grpRegionLabels.classList.remove('is-hidden');
             }
             this._materializeDeferredPrefectures();
             this._rescaleSvgTypography();

@@ -227,8 +227,8 @@
       if (actChal) actChal.classList.add('is-active');
       const lblChal = this._id('lbl-challenge') || actChal;
       if (lblChal) {
-        lblChal.textContent =
-          this.locale === 'en' ? 'Quiz Active · Click to Exit' : '挑战进行中 · 点击退出';
+        lblChal.textContent = this.locale === 'en' ? 'Exit Quiz ×' : '退出小试 ×';
+        if (this.locale === 'zh-tw') this._applyZhHantDom(lblChal);
       }
       this.svg.classList.add('is-crosshair');
       this.grpSettlements.classList.add('is-hidden');
@@ -258,8 +258,8 @@
       if (actChal) actChal.classList.remove('is-active');
       const lblChal = this._id('lbl-challenge') || actChal;
       if (lblChal) {
-        lblChal.textContent =
-          this.locale === 'en' ? 'Map Pinpoint · Ancient Place Quiz' : '舆图寻址 · 古地名小试';
+        lblChal.textContent = this.locale === 'en' ? 'Quiz ›' : '古地名小试 ›';
+        if (this.locale === 'zh-tw') this._applyZhHantDom(lblChal);
       }
       this.svg.classList.remove('is-crosshair');
       const chkSettle = this._id('chk-settlements');
@@ -353,15 +353,20 @@
             break;
           }
         }
-        const sep = this.locale === 'en' ? ': ' : '：';
+        // "523年：六镇之乱：…" / "1077年：苏轼：…" read badly; fall back to " · " when the
+        // event text already has its own colon.
+        const sepFor = (txt) => {
+          const colon = this.locale === 'en' ? ': ' : '：';
+          return txt.includes(colon.trim()) ? ' · ' : colon;
+        };
         if (chosenEv) {
-          extraEventStr = ` · ${chosenEv.yrLbl}${sep}${chosenEv.cleanEv}`;
+          extraEventStr = ` · ${chosenEv.yrLbl}${sepFor(chosenEv.cleanEv)}${chosenEv.cleanEv}`;
         } else if (
           firstClean &&
           !baseClue.includes('；') &&
           firstClean.cleanEv.length > baseClue.length
         ) {
-          baseClue = `${firstClean.yrLbl}${sep}${firstClean.cleanEv}`;
+          baseClue = `${firstClean.yrLbl}${sepFor(firstClean.cleanEv)}${firstClean.cleanEv}`;
         }
       }
 
@@ -383,7 +388,7 @@
       this._id('challenge-question').innerHTML =
         `<div>${promptHtml}</div>` +
         `<div class="challenge-clue-box"><span class="clue-tag">${clueTag}</span><span>${escHtml(baseClue + extraEventStr)}</span></div>`;
-      if (this.locale === 'zh-tw') this._applyZhHantDom(this._id('challenge-banner'));
+      if (this.locale === 'zh-tw') this._applyZhHantDom(this._id('challenge-card'));
     }
 
     presentChallengeRound() {
@@ -451,7 +456,7 @@
         this._svgNode('text', { class: 'quiz-chip-text', y: 3.8 }, chip);
       }
       const text = chip.querySelector('text');
-      text.textContent = this.locale === 'en' ? label : this._zh(label);
+      text.textContent = this._mapText(this.locale === 'en' ? label : this._zh(label));
       const w =
         (typeof text.getComputedTextLength === 'function'
           ? text.getComputedTextLength()
@@ -527,7 +532,7 @@
           : `${cur.settlement.ancient}（今${cur.settlement.modern}）`;
       if (this.grpChallenge) {
         const textNode = this.grpChallenge.querySelector('text.answer-label');
-        if (textNode) textNode.textContent = aLabelText;
+        if (textNode) textNode.textContent = this._mapText(aLabelText);
       }
       this._id('challenge-points').textContent = `${this.uiStr('quiz_score', '得分')} ${q.score}`;
       const comment =
@@ -557,7 +562,7 @@
       this._rescaleSvgTypography();
       this._id('challenge-result').classList.remove('is-hidden');
       if (this.locale === 'zh-tw') {
-        this._applyZhHantDom(this._id('challenge-banner'));
+        this._applyZhHantDom(this._id('challenge-card'));
         this._applyZhHantDom(this.grpChallenge);
       }
     }
@@ -670,10 +675,11 @@
           ? this.trModernCity(cur.settlement.ancient)
           : this.trTerm(cur.settlement.ancient);
       const ansModEn = cur.settlement.modernEn || this.trModernCity(cur.settlement.modern);
-      aLabel.textContent =
+      aLabel.textContent = this._mapText(
         this.locale === 'en'
           ? `${ansAncEn} (${ansModEn})`
-          : `${cur.settlement.ancient}（今${cur.settlement.modern}）`;
+          : `${cur.settlement.ancient}（今${cur.settlement.modern}）`
+      );
 
       this._drawQuizMark(svgX, svgY, true);
       this._rescaleSvgTypography();
@@ -710,7 +716,7 @@
         nextBtn.onclick = null;
         this.startChallenge();
       };
-      if (this.locale === 'zh-tw') this._applyZhHantDom(this._id('challenge-banner'));
+      if (this.locale === 'zh-tw') this._applyZhHantDom(this._id('challenge-card'));
     }
   }
 

@@ -1281,7 +1281,7 @@ async function runSearchRuntimeSuite(ctx) {
           ctrl._polityRulers(ctrl._resolvePolity('宋', 450)).startsWith('武帝 → 少帝 → 文帝'),
           `Liu Song rulers must derive from monarchPrefix era spans, got ${ctrl._polityRulers(ctrl._resolvePolity('宋', 450))}`
         );
-        const ccDesc = ctrl._resolvePolity('曹操(北方)', 205);
+        const ccDesc = ctrl._resolvePolity('曹操（北方）', 205);
         assert(
           !ccDesc.curated && ccDesc.from === 200 && ccDesc.to === 219 && ccDesc.keywords.includes('曹操'),
           `Uncurated warlord must derive its on-map span 200–219 and name keyword, got ${JSON.stringify(ccDesc)}`
@@ -1673,6 +1673,90 @@ async function runSearchRuntimeSuite(ctx) {
         ctrl.locale = 'zh';
       }
 
+      // Deep links (?year=383): the full snapshot bundle is preloaded from <head>, and while a
+      // snapshot is still downloading no other era's borders or key stay on screen.
+      {
+        assert(
+          /link\.href = 'js\/atlas_snapshots\.js\?v=[0-9a-f]{8}'/.test(indexHtml) &&
+            indexHtml.indexOf('deeplink-boot') < indexHtml.indexOf('css/style.css'),
+          'index.html must preload the snapshot bundle for deep links before the stylesheet'
+        );
+        const flags = () => {
+          const set = new Set();
+          return { add: (c) => set.add(c), remove: (c) => set.delete(c), contains: (c) => set.has(c) };
+        };
+        const saved = { svg: ctrl.svg, mapKey: ctrl.mapKey, snapshots: ctrl.snapshots };
+        try {
+          ctrl.svg = { classList: flags() };
+          ctrl.mapKey = { classList: flags() };
+          ctrl.snapshots = { s_loaded: {} };
+          ctrl._markAwaitingSnapshot('s_loaded');
+          assert(!ctrl.svg.classList.contains('is-awaiting-snapshot'), 'a loaded snapshot hides nothing');
+          ctrl._markAwaitingSnapshot('s_pending');
+          assert(
+            ctrl.svg.classList.contains('is-awaiting-snapshot') && ctrl.mapKey.classList.contains('is-awaiting-snapshot'),
+            'a pending snapshot hides the borders and the key until it is rendered'
+          );
+        } finally {
+          ctrl.svg = saved.svg;
+          ctrl.mapKey = saved.mapKey;
+          ctrl.snapshots = saved.snapshots;
+        }
+      }
+
+      // Deep links fetch the borders before the relief image, the terrain tiles and the lore bundles.
+      {
+        assert(
+          indexHtml.includes('<image id="terrain-relief-img" data-href="assets/terrain_relief.webp"') &&
+            !/<image id="terrain-relief-img"[^>]*\shref=/.test(indexHtml) &&
+            indexHtml.indexOf("relief.href = 'assets/terrain_relief.webp'") > 0 &&
+            indexHtml.indexOf("relief.href = 'assets/terrain_relief.webp'") < indexHtml.indexOf('css/style.css'),
+          'index.html: #terrain-relief-img takes its href from data-href (deep links wait for the borders); other pages preload it from <head>'
+        );
+        const flags = () => {
+          const set = new Set();
+          return { add: (c) => set.add(c), remove: (c) => set.delete(c), contains: (c) => set.has(c) };
+        };
+        const saved = {
+          svg: ctrl.svg,
+          held: ctrl._deferredLoadsHeld,
+          released: ctrl._deferredLoadsReleased,
+          setTimeout: sandbox.setTimeout,
+          document: sandbox.document,
+        };
+        const timers = [];
+        try {
+          sandbox.setTimeout = (fn, ms) => timers.push(ms);
+          sandbox.document = undefined;
+          ctrl._deferredLoadsHeld = false;
+          ctrl._deferredLoadsReleased = false;
+          ctrl.svg = { classList: flags() };
+          ctrl._holdDeferredLoads();
+          assert(!ctrl._deferredLoadsHeld && timers.length === 0, 'nothing is held back when the borders are already drawn');
+          ctrl.svg.classList.add('is-awaiting-snapshot');
+          ctrl._holdDeferredLoads();
+          assert(
+            ctrl._deferredLoadsHeld === true &&
+              ctrl.svg.classList.contains('is-terrain-pending') &&
+              ctrl._terrainReady() === false &&
+              timers.length === 1 &&
+              timers[0] === 6000,
+            'awaited borders hold back the relief and terrain tiles, with a 6 s fallback release'
+          );
+          ctrl._releaseDeferredLoads();
+          assert(
+            ctrl._deferredLoadsHeld === false && ctrl._deferredLoadsReleased === true,
+            'the hold is released once'
+          );
+        } finally {
+          ctrl.svg = saved.svg;
+          ctrl._deferredLoadsHeld = saved.held;
+          ctrl._deferredLoadsReleased = saved.released;
+          sandbox.setTimeout = saved.setTimeout;
+          sandbox.document = saved.document;
+        }
+      }
+
       // CUJ 45: High-resolution terrain tiles — reset view stays on the base relief, Data Saver is
       // respected, every indexed tile exists, and the base relief shares the tiles' projection.
       {
@@ -1680,7 +1764,7 @@ async function runSearchRuntimeSuite(ctx) {
           indexHtml.includes('<g id="terrain-relief-layer">') &&
             indexHtml.includes('<g id="grp-terrain-tiles"></g>') &&
             indexHtml.includes('<g id="grp-paleo-sea"></g>') &&
-            cssSrc.includes('#terrain-relief-layer {\n  opacity: 0.48;') &&
+            cssSrc.includes('#terrain-relief-layer {\n  opacity: 0.62;') &&
             cssSrc.includes('.paleo-sea {\n  fill: #e6dfd1;'),
           'index.html must wrap #terrain-relief-img, #grp-terrain-tiles, and #grp-paleo-sea in #terrain-relief-layer so .paleo-sea (#e6dfd1) composites seamlessly with open water'
         );
@@ -1978,6 +2062,26 @@ async function runSearchRuntimeSuite(ctx) {
           grpPref.children.length === 0 && lazyCtrl._deferredPrefectureSnap === tangSnap0 && prefPathCreates === 0,
           'Hidden #grp-prefectures must defer prefecture SVG DOM creation during _renderPolitiesAndPrefectures'
         );
+        // Map captions use half-width brackets (they cost ~3 characters a pair in letter-spaced
+        // labels); the title in the data, used for lookups and panels, keeps full-width ones.
+        const bracketCaps = grpPol
+          .querySelectorAll('.polity-caption')
+          .filter((cap) => /（/.test(cap.dataset.polityTitle));
+        assert(
+          bracketCaps.length >= 3 &&
+            bracketCaps.every(
+              (cap) =>
+                cap.textContent === lazyCtrl._mapText(cap.dataset.polityTitle) &&
+                !/[（）]/.test(cap.textContent)
+            ),
+          `Polity captions must render （） as (), got ${JSON.stringify(bracketCaps.map((cap) => cap.textContent))}`
+        );
+        assert(
+          proto._mapText.call({ locale: 'zh' }, '马腾 · 韩遂（关陇）') === '马腾·韩遂(关陇)' &&
+            proto._mapText.call({ locale: 'en' }, 'Mongols · Moghulistan') === 'Mongols · Moghulistan' &&
+            proto._mapText.call({ locale: 'zh' }, null) === '',
+          'Map text must tighten " · " to "·" in Chinese and leave English separators alone'
+        );
         grpPref.classList.remove('is-hidden');
         const expectedPrefCount = (tangSnap0.prefectures || []).length;
         assert(
@@ -2200,7 +2304,7 @@ async function runSearchRuntimeSuite(ctx) {
         ]);
         const jpOccSet = new Set([
           's_qing_g0', 's_qing_g',
-          's_roc_a0', 's_roc_w1', 's_roc_w2', 's_roc_w3', 's_roc_w4',
+          's_roc_a0', 's_roc_w1', 's_roc_w2', 's_roc_w3', 's_roc_w3b', 's_roc_w4',
           's_roc_a', 's_roc_b0', 's_roc',
         ]);
         const rocPost45Set = new Set(['s_roc_c', 's_roc_d']);
@@ -2331,8 +2435,8 @@ async function runSearchRuntimeSuite(ctx) {
         `${sid} must include 安南`
       );
     }
-    const chuA = snapshots.s_wudai_a.polities.find((p) => p.title === '楚 · 荆南');
-    assert.strictEqual(chuA.shape.type, 'Polygon', 's_wudai_a 楚 · 荆南 must be a single dissolved Polygon');
+    const chuA = snapshots.s_wudai_a.polities.find((p) => p.title === '楚（马楚）');
+    assert.strictEqual(chuA.shape.type, 'Polygon', 's_wudai_a 楚（马楚） must be a single dissolved Polygon');
 
     for (const [sid, title, maxPieces] of [
       ['s_yuan_b', '元', 3],
@@ -2438,11 +2542,11 @@ async function runSearchRuntimeSuite(ctx) {
 
     // 6-era boundary & gap regression checks (195 Donghan, 322 Dongjin, 676 Tang, 1410 Ming, 1650 Qing, 1918 ROC)
     const ptIn = sandbox.window.MercatorProjector.pointInShape;
-    const dz195 = snapshots.s_donghan_d1.polities.find((p) => p.title === '董卓(长安)');
-    const mt195 = snapshots.s_donghan_d1.polities.find((p) => p.title === '马腾(凉州)');
+    const dz195 = snapshots.s_donghan_d1.polities.find((p) => p.title === '董卓（长安）');
+    const mt195 = snapshots.s_donghan_d1.polities.find((p) => p.title === '马腾（凉州）');
     assert(
       !ptIn(106.5, 38.0, dz195.shape) && ptIn(106.5, 38.0, mt195.shape),
-      's_donghan_d1 (195 CE): Northern Ningxia [106.5, 38.0] must belong to 马腾(凉州), not a Dong Zhuo horn'
+      's_donghan_d1 (195 CE): Northern Ningxia [106.5, 38.0] must belong to 马腾（凉州）, not a Dong Zhuo horn'
     );
     for (const [sk, mainTitle] of [['s_tang_a', '唐'], ['s_tang_wz1', '武周']]) {
       const mPol = snapshots[sk].polities.find((p) => p.title === mainTitle);
@@ -2452,6 +2556,7 @@ async function runSearchRuntimeSuite(ctx) {
       ['s_roc_w1', '奉系（张作霖）'],
       ['s_roc_w2', '奉系（张作霖）'],
       ['s_roc_w3', '北洋政府 · 奉系（张作霖）'],
+      ['s_roc_w3b', '北洋政府 · 奉系（张作霖）'],
       ['s_roc_w4', '安国军政府 · 奉系（张作霖）'],
     ]) {
       const fPol = snapshots[sk].polities.find((p) => p.title === fengTitle);
@@ -2514,6 +2619,83 @@ async function runSearchRuntimeSuite(ctx) {
           appSrc.includes('const suppressCenterScroll = Boolean(this._suppressChronicleAutoScroll)'),
         'js/app.js must suppress forced center-scrolling when clicking a visible item in #milestone-list (#299)'
       );
+    }
+
+    // Discussion #366: the highlighted milestone shows its sources (Chinese locales only, lazy data).
+    {
+      const srcCtx = { window: {} };
+      vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'js', 'milestone_sources.js'), 'utf8'), srcCtx);
+      const data = srcCtx.window.ATLAS_MILESTONE_SOURCES;
+      const html316 = ctrl._milestoneSourceHtml(data['xijin:316']);
+      const text316 = html316.replace(/<[^>]+>/g, '');
+      assert.strictEqual(
+        text316,
+        '据《资治通鉴》卷89、卷91 《晋书》卷108',
+        'xijin:316 source line merges repeated chapters per work, in citation order'
+      );
+      assert(!html316.includes('<a '), 'the line is plain text: Wikisource is unreachable for many readers');
+      assert.strictEqual(ctrl._milestoneSourceHtml(undefined), '', 'a milestone without sources gets no line');
+
+      const xijin = dynasties.find((d) => d.key === 'xijin');
+      const lineNode = () => ({
+        className: '',
+        innerHTML: '',
+        remove() {
+          this.parent.kids.splice(this.parent.kids.indexOf(this), 1);
+        },
+      });
+      // Array.from keeps the mocks in this realm; sandbox arrays fail deepStrictEqual on prototype.
+      const lis = Array.from(xijin.milestones, () => ({
+        kids: [],
+        appendChild(n) {
+          n.parent = this;
+          this.kids.push(n);
+        },
+      }));
+      const listEl = {
+        children: lis,
+        querySelectorAll: () => lis.flatMap((li) => li.kids.filter((k) => k.className === 'ev-src')),
+      };
+      const saved = {
+        _id: ctrl._id,
+        locale: ctrl.locale,
+        year: ctrl.year,
+        activePolity: ctrl.activePolity,
+        activeMilestone: ctrl.activeMilestone,
+        document: sandbox.document,
+        sources: sandbox.window.ATLAS_MILESTONE_SOURCES,
+      };
+      try {
+        ctrl._id = (id) => (id === 'milestone-list' ? listEl : saved._id.call(ctrl, id));
+        sandbox.document = { ...(saved.document || {}), createElement: lineNode };
+        sandbox.window.ATLAS_MILESTONE_SOURCES = data;
+        ctrl.activePolity = null;
+        ctrl.activeMilestone = null;
+        const linesAt = () => lis.map((li, i) => (li.kids.length ? xijin.milestones[i].year : null)).filter((y) => y !== null);
+
+        ctrl.locale = 'zh';
+        ctrl.year = 316;
+        ctrl._syncMilestoneSource(xijin);
+        assert.deepStrictEqual(linesAt(), [316], 'zh: exactly the highlighted milestone carries the source line');
+        ctrl.year = 313;
+        ctrl._syncMilestoneSource(xijin);
+        assert.deepStrictEqual(linesAt(), [313], 'moving the highlight moves the line instead of adding another');
+        ctrl.locale = 'en';
+        ctrl._syncMilestoneSource(xijin);
+        assert.deepStrictEqual(linesAt(), [], 'en: no source line');
+        ctrl.locale = 'zh';
+        ctrl.activePolity = { key: 'nantang' };
+        ctrl._syncMilestoneSource(xijin);
+        assert.deepStrictEqual(linesAt(), [], 'polity focus lists related events, not milestones: no line');
+      } finally {
+        ctrl._id = saved._id;
+        ctrl.locale = saved.locale;
+        ctrl.year = saved.year;
+        ctrl.activePolity = saved.activePolity;
+        ctrl.activeMilestone = saved.activeMilestone;
+        sandbox.document = saved.document;
+        sandbox.window.ATLAS_MILESTONE_SOURCES = saved.sources;
+      }
     }
 
     // Discussion #297 regression check: Event Storyline Mod (点事溯局 · ?event=anshi)
@@ -2611,11 +2793,35 @@ async function runSearchRuntimeSuite(ctx) {
         );
       }
 
+      const qintongyiProf = ctrl._resolvePersonProfile('qintongyi');
+      assert(
+        qintongyiProf && qintongyiProf.isStory === true && Array.isArray(qintongyiProf.stops) && qintongyiProf.stops.length === 10,
+        'qintongyi must resolve as an Event Storyline (isStory: true) with 10 chronological stops'
+      );
+      assert(
+        !loreData.HISTORICAL_JOURNEYS.some((j) => j.key === 'qinshihuang') &&
+          !ctrl._resolvePersonProfile('qinshihuang').journeyKey,
+        'The Qin unification is told by the qintongyi storyline, not a Qin Shi Huang journey'
+      );
+      for (const sq of ['秦灭六国', '扫六合', '六王毕', 'qinmieliuguo', 'qintongyi']) {
+        const sqHits = ctrl._queryQuickSearch(sq);
+        assert(
+          sqHits.length > 0 && sqHits[0].kind === 'story' && sqHits[0].storyKey === 'qintongyi',
+          `Quick search for "${sq}" must surface the Qin unification storyline (kind="story") at index 0`
+        );
+      }
+      const zhanguoDyn = dynasties.find((d) => d.key === 'zhanguo');
+      assert.strictEqual(
+        ctrl._findStoryForMilestone(zhanguoDyn, zhanguoDyn.milestones.find((m) => m.year === -230))?.key,
+        'qintongyi',
+        'The 230 BCE fall of Han must carry the [始末] entry for the Qin unification storyline'
+      );
+
       // Universal Event Storyline (`isStory: true`) invariants:
       // 1) Must declare `dynastyKey` and a 2-char Chinese stem alias searchable as `kind: "story"`.
       // 2) Must map to EXACTLY ONE `[始末]` milestone across all dynasties in `_findStoryForMilestone`.
       const allStoryProfiles = (loreData.PERSON_PROFILES || []).filter((p) => p && p.isStory);
-      assert(allStoryProfiles.length >= 3, 'Expected at least 3 Event Storylines (anshi, jingkang, chuhan)');
+      assert(allStoryProfiles.length >= 4, 'Expected at least 4 Event Storylines (anshi, jingkang, qintongyi, chuhan)');
       for (const sp of allStoryProfiles) {
         assert(
           typeof sp.dynastyKey === 'string' && dynasties.some((d) => d.key === sp.dynastyKey),
@@ -2693,7 +2899,176 @@ async function runSearchRuntimeSuite(ctx) {
         ctrl.activePerson.sameTimeCount,
         'When personSharedOnly is active, _getNavigablePersonEventIdxs must step strictly across shared encounters'
       );
-      ctrl.closeGenealogyCard();
+      ctrl.personSharedOnly = false;
+      const prevSvgNode = ctrl._svgNode;
+      const prevGrpJourney = ctrl.grpJourney;
+      const prevTypo = ctrl._rescaleSvgTypography;
+      const prevLoc = ctrl.locale;
+      const recordedSvg = [];
+      try {
+        ctrl.locale = 'zh';
+        ctrl.grpJourney = { innerHTML: '', querySelectorAll: () => [] };
+        ctrl._rescaleSvgTypography = () => {};
+        ctrl._svgNode = (tag, attrs = {}) => {
+          const node = {
+            tag,
+            attrs,
+            style: {},
+            dataset: {},
+            textContent: '',
+            appendChild() {},
+            setAttribute(k, v) {
+              this.attrs[k] = v;
+            },
+          };
+          recordedSvg.push(node);
+          return node;
+        };
+        ctrl.selectPersonEvent(-1, false);
+        const multiNums = recordedSvg.filter((n) => n.attrs && n.attrs.class === 'jn-num');
+        assert(
+          multiNums.length >= 10,
+          `Multi-person overview must render numbered map pins (.jn-num), got ${multiNums.length}`
+        );
+        assert.strictEqual(
+          ControllerClass.PERSON_TRACK_PALETTE[0],
+          '#9e3a26',
+          'PERSON_TRACK_PALETTE must use muted mineral pigment tones'
+        );
+
+        // Simultaneous peer coordinate anchors on multi-person single step (e.g. Du Fu 759 Qinzhou -> Li Bai @ Baidicheng)
+        recordedSvg.length = 0;
+        ctrl.selectPersonEvent(17, false);
+        const ldgSyncAnchors = ctrl._getSimultaneousPeerAnchors(
+          ctrl.activePerson,
+          17,
+          ctrl.activePerson.events[17]
+        );
+        assert(
+          ldgSyncAnchors.some((a) => a.profile.key === 'libai' && a.ev.siteZh.includes('白帝')) &&
+            ldgSyncAnchors.some((a) => a.profile.key === 'gaoshi' && a.ev.siteZh.includes('扬州')),
+          'At 759 CE Qinzhou (Du Fu), _getSimultaneousPeerAnchors must anchor Li Bai at Baidicheng (759) and Gao Shi at Yangzhou (757)'
+        );
+        const peerSyncLabels = recordedSvg.filter(
+          (n) => n.attrs && String(n.attrs.class || '').includes('is-peer-sync-label')
+        );
+        assert(
+          peerSyncLabels.some((n) => n.textContent.includes('白帝城·李白')),
+          'Single-step map must light up simultaneous peer coordinate with concise "<City>·<Name>" label'
+        );
+        ctrl.closeGenealogyCard();
+
+        // Chronological tie-break: Liu Bang @ Xianyang (206 BCE, stop 4) must anchor Xiang Yu at prior Julu (207 BCE) rather than future Chenxian
+        const prevId = ctrl._id;
+        const fakeLore = {
+          innerHTML: '',
+          classList: {
+            hidden: true,
+            add(c) {
+              if (c === 'is-hidden') this.hidden = true;
+            },
+            remove(c) {
+              if (c === 'is-hidden') this.hidden = false;
+            },
+          },
+          querySelectorAll: () => [],
+        };
+        const fakeBody = { scrollTop: 99 };
+        const prevDoc = sandbox.document;
+        try {
+          sandbox.document = {
+            createElement: () => ({
+              className: '',
+              dataset: {},
+              style: { setProperty() {} },
+              innerHTML: '',
+              addEventListener() {},
+              querySelector: () => null,
+              querySelectorAll: () => [],
+              scrollIntoView() {
+                fakeBody.scrollTop = 500;
+              },
+            }),
+          };
+          const fakeTimeline = {
+            innerHTML: '',
+            children: [],
+            appendChild(ch) {
+              this.children.push(ch);
+            },
+          };
+          ctrl._id = (id) => {
+            if (id === 'genealogy-lore') return fakeLore;
+            if (id === 'genealogy-timeline') return fakeTimeline;
+            if (id === 'genealogy-body') return fakeBody;
+            return null;
+          };
+          ctrl.openPersonChronicle(['liubang', 'xiangyu'], -1);
+          assert(
+            fakeLore.classList.hidden === false &&
+              fakeLore.innerHTML.includes('同世交集') &&
+              fakeLore.innerHTML.includes('mp-span-chart') &&
+              fakeLore.innerHTML.includes('际会：'),
+            'Multi-person #genealogy-lore must render Co-Lifespan ruler (同世交集) and inline encounter links (际会：)'
+          );
+          assert.strictEqual(
+            fakeBody.scrollTop,
+            0,
+            'Multi-person overview open must keep scrollTop at 0 instead of clipping top rows via firstSharedLi.scrollIntoView'
+          );
+          const lxEvs = ctrl.activePerson.events;
+          const xianyangIdx = lxEvs.findIndex(
+            (e) => e.personKey === 'liubang' && e.siteZh.includes('咸阳')
+          );
+          const xyAnchors = ctrl._getSimultaneousPeerAnchors(
+            ctrl.activePerson,
+            xianyangIdx,
+            lxEvs[xianyangIdx]
+          );
+          assert(
+            xyAnchors.length === 1 && xyAnchors[0].ev.siteZh.includes('巨鹿'),
+            'At Liu Bang’s entry into Xianyang (206 BCE), Xiang Yu’s simultaneous anchor must be prior Julu (207 BCE) rather than future Chenxian'
+          );
+        } finally {
+          ctrl._id = prevId;
+          sandbox.document = prevDoc;
+        }
+        ctrl.closeGenealogyCard();
+
+        // Solo multi-visit capital stacking (.jn-stack-ring) & >6-year scraped arrow suppression
+        recordedSvg.length = 0;
+        ctrl.openPersonChronicle('hanwudi', -1);
+        const wudiEvs = ctrl.activePerson.events;
+        const wudiNodes = recordedSvg.filter(
+          (n) => n.tag === 'g' && String(n.attrs.class || '').includes('journey-node')
+        );
+        const wudiStackRings = recordedSvg.filter(
+          (n) => n.attrs && n.attrs.class === 'jn-stack-ring'
+        );
+        assert(
+          wudiNodes.length < wudiEvs.length && wudiStackRings.length >= 1,
+          'Solo chronicle with repeated Chang’an events (hanwudi) must collapse co-located pins into a concentric .jn-stack-ring node'
+        );
+        const longGapIdx = wudiEvs.findIndex(
+          (ev, idx) => idx > 0 && Math.abs(ev.year - wudiEvs[idx - 1].year) > 6
+        );
+        assert(
+          longGapIdx > 0 &&
+            ctrl._getSoloStepOriginCoord(
+              ctrl.activePerson,
+              wudiEvs,
+              longGapIdx,
+              wudiEvs[longGapIdx]
+            ) === null,
+          'Non-journey scraped solo events separated by >6 years must suppress misleading cross-country trajectory arrows'
+        );
+        ctrl.closeGenealogyCard();
+      } finally {
+        ctrl.locale = prevLoc;
+        ctrl._svgNode = prevSvgNode;
+        ctrl.grpJourney = prevGrpJourney;
+        ctrl._rescaleSvgTypography = prevTypo;
+      }
     }
   }
 

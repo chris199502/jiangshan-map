@@ -500,12 +500,71 @@ async function runTraceGenealogySuite(ctx) {
     mockSeoNav.dataset.locale === 'en' &&
       mockSeoNav.innerHTML.includes('Warring States Historical Map') &&
       mockSeoNav.innerHTML.includes("People's Republic of China Historical Map") &&
-      !/[\u4e00-\u9fff]/.test(mockSeoNav.innerHTML),
-    'In English mode, _syncSeoDirectoryLocale() must translate all 18 dynasty entries with zero remaining CJK characters'
+      !/[\u4e00-\u9fff]/.test(mockSeoNav.innerHTML) &&
+      !mockSeoNav.innerHTML.includes('undefined'),
+    'In English mode, _syncSeoDirectoryLocale() must translate all 18 dynasty entries with zero remaining CJK characters or undefined strings'
   );
   ctrl.locale = 'zh';
   ctrl._syncSeoDirectoryLocale();
   assert.strictEqual(mockSeoNav.innerHTML, '<h2>江山时序</h2>', '_syncSeoDirectoryLocale() must restore Chinese HTML when switching back to zh');
+
+  // Cold-boot regression (#410): _syncSeoDirectoryLocale before lore_detail.js loads must not emit "undefined",
+  // and _ensureLoreDetail() must automatically re-hydrate all 20 pass descriptions once loaded.
+  {
+    const passes = ctrl.constructor.STRATEGIC_PASSES;
+    const savedSentinel = sandbox.window.ATLAS_LORE_DETAIL_LOADED;
+    const savedLandmarks = sandbox.window.ATLAS_LORE_DATA.PLACE_LANDMARK_EVENTS;
+    const savedLoaded = ctrl._loreDetailLoaded;
+    const savedPromise = ctrl._loreDetailPromise;
+    const savedLoadOnce = ctrl._loadScriptOnce;
+    const savedChokes = passes.map((p) => p.chokepointEn);
+    try {
+      sandbox.window.ATLAS_LORE_DETAIL_LOADED = false;
+      delete sandbox.window.ATLAS_LORE_DATA.PLACE_LANDMARK_EVENTS;
+      ctrl._loreDetailLoaded = false;
+      ctrl._loreDetailPromise = null;
+      passes.forEach((p) => {
+        delete p.chokepointEn;
+      });
+      ctrl.locale = 'en';
+      ctrl._syncSeoDirectoryLocale();
+      assert(
+        mockSeoNav.dataset.locale === 'en' &&
+          mockSeoNav.dataset.enDetail === '0' &&
+          !mockSeoNav.innerHTML.includes('undefined'),
+        'Before lore_detail.js loads, English SEO directory must render without literal "undefined" and mark enDetail=0'
+      );
+      ctrl._loadScriptOnce = () => ({
+        then(cb) {
+          sandbox.window.ATLAS_LORE_DATA.PLACE_LANDMARK_EVENTS = savedLandmarks;
+          passes.forEach((p, idx) => {
+            p.chokepointEn = savedChokes[idx];
+          });
+          sandbox.window.ATLAS_LORE_DETAIL_LOADED = true;
+          return Promise.resolve(cb());
+        },
+      });
+      ctrl._ensureLoreDetail();
+      assert(
+        mockSeoNav.dataset.enDetail === '1' &&
+          !mockSeoNav.innerHTML.includes('undefined') &&
+          mockSeoNav.innerHTML.includes(savedChokes[0]) &&
+          mockSeoNav.innerHTML.includes(savedChokes[savedChokes.length - 1]),
+        'Resolving _ensureLoreDetail() in English mode must re-sync #seo-atlas-directory with all 20 chokepointEn descriptions'
+      );
+    } finally {
+      passes.forEach((p, idx) => {
+        p.chokepointEn = savedChokes[idx];
+      });
+      sandbox.window.ATLAS_LORE_DETAIL_LOADED = savedSentinel;
+      sandbox.window.ATLAS_LORE_DATA.PLACE_LANDMARK_EVENTS = savedLandmarks;
+      ctrl._loreDetailLoaded = savedLoaded;
+      ctrl._loreDetailPromise = savedPromise;
+      ctrl._loadScriptOnce = savedLoadOnce;
+      ctrl.locale = 'zh';
+      ctrl._syncSeoDirectoryLocale();
+    }
+  }
   ctrl._clearQuickSearchInput();
   assert.strictEqual(mockSearchInp.value, '', '_clearQuickSearchInput() must clear #inp-map-search value');
   ctrl._id = origId23e;
@@ -559,7 +618,7 @@ async function runTraceGenealogySuite(ctx) {
     );
   }
   const tangSnapKeys = Object.keys(snapshots).filter((k) => k.startsWith('s_tang'));
-  assert(tangSnapKeys.length === 28, `Expected 28 s_tang* snapshots, found ${tangSnapKeys.length}`);
+  assert(tangSnapKeys.length === 29, `Expected 29 s_tang* snapshots, found ${tangSnapKeys.length}`);
   // Issue #267. Tang northeast: 平壤 is 安东's seat until 676, never 新罗's before 702;
   // 震国 (698–713) is renamed 渤海 only from 713; 安西 / 北庭 hold oases, not the desert, in 764–790;
   // the Four Garrisons fall to 吐蕃 in 670–679 and 686–692, when 安西 falls back to 西州.
@@ -859,7 +918,7 @@ async function runTraceGenealogySuite(ctx) {
     '印度',
     '不丹',
     '尼泊尔',
-    '克什米尔·拉达克',
+    '克什米尔 · 拉达克',
     '莫卧儿帝国',
     '锡克（拉合尔）',
     '阿富汗',
@@ -1191,6 +1250,7 @@ async function runTraceGenealogySuite(ctx) {
     ['s_roc_w1', ['北洋政府 · 皖系（段祺瑞）', '直系（冯国璋 · 曹锟）', '奉系（张作霖）', '护法军政府 · 西南各系', '晋系（阎锡山）', '西北诸马（甘宁青）', '新疆（杨增新）']],
     ['s_roc_w2', ['北洋政府 · 直系（曹锟 · 吴佩孚）', '奉系（张作霖）', '皖系（卢永祥 · 浙江）', '广州政府（孙中山）', '西南川滇黔桂各系', '晋系（阎锡山）', '西北诸马（甘宁青）', '新疆（杨增新）']],
     ['s_roc_w3', ['北洋政府 · 奉系（张作霖）', '五省联军（孙传芳）', '直系（吴佩孚）', '西北国民军（冯玉祥）', '广州国民政府（两广统一）', '川滇黔军阀（刘湘 · 唐继尧）', '晋系（阎锡山）', '新疆（杨增新）']],
+    ['s_roc_w3b', ['北洋政府 · 奉系（张作霖）', '国民政府（北伐军）', '五省联军（孙传芳）', '直系（吴佩孚）', '西北国民军（冯玉祥）', '川滇黔军阀（刘湘 · 唐继尧）', '晋系（阎锡山）', '新疆（杨增新）']],
     ['s_roc_w4', ['国民政府（北伐军与冯阎集团）', '安国军政府 · 奉系（张作霖）', '新疆（杨增新）']],
   ]) {
     const rs = snapshots[rk];
