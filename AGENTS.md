@@ -9,3 +9,6 @@ For deployment through the shared Caddy container, read [docs/DOCKER_DEPLOYMENT.
 - Preserve the custom years-ago line in the timeline bubble, its BCE calculation, mobile clearance, and regression checks when resolving conflicts.
 - Merge upstream into this fork; do not reset this branch to upstream or replace whole conflicted files with either side.
 - After changing JS/CSS, run `node scripts/sync_version.js`, `node scripts/validate_years_ago.cjs`, and `node scripts/validate_atlas.js`. See the maintenance document for browser checks and prerequisites.
+
+- Preserve the independent location layer and cancelable location requests, event distances, grouped map controls, collapsible/adaptive legend, 前/BCE year input, and phone dynasty chips with the local ruler. The phone ruler and upstream crop handles must use the same year scale.
+- Upstream v1.3.0 split atlas checks into `scripts/tests/`; keep fork fixture/layout adaptations there. Run `node scripts/validate_user_location.cjs` and `node scripts/audit_layout.js --check` as well as the checks above. The browser audit must exercise `window.atlasApp`, including zoom states and 320px phones.

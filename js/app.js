@@ -28,9 +28,6 @@
     '北魏', '东魏', '西魏', '北齐', '北周', '西梁', '武周', '后梁', '后唐', '后晋', '后汉', '后周',
     '北宋', '南宋', '蜀汉', '西夏', '周', '秦', '汉', '魏', '吴', '晋', '宋', '齐', '梁', '陈', '隋', '唐', '辽', '金', '元', '明', '清',
   ];
-  const CORE_REGIME_CHARS = new Set(
-    '齐宋梁陈魏吴楚燕赵韩秦晋鲁巴蜀越周代夏凉唐汉郑顺'.split('')
-  );
   const ERA_CHAR_PINYIN = {
     威: 'wei', 烈: 'lie', 王: 'wang', 安: 'an', 显: 'xian', 慎: 'shen', 靓: 'jing', 赧: 'nan', 昭: 'zhao', 襄: 'xiang',
     孝: 'xiao', 文: 'wen', 庄: 'zhuang', 政: 'zheng', 始: 'shi', 皇: 'huang', 二: 'er', 世: 'shi', 高: 'gao', 帝: 'di',
@@ -375,6 +372,13 @@
       );
       this._fullSnapshotsPromise = null;
       this._enLocalePromise = null;
+      this._loreDetailLoaded = Boolean(
+        window.ATLAS_LORE_DETAIL_LOADED ||
+          (window.ATLAS_LORE_DATA &&
+            Array.isArray(window.ATLAS_LORE_DATA.PLACE_LANDMARK_EVENTS) &&
+            window.ATLAS_LORE_DATA.PLACE_LANDMARK_EVENTS.length > 0)
+      );
+      this._loreDetailPromise = null;
       this._hydrateSnapshots();
 
       this._setEnglishLocale(window.EN_LOCALE || {
@@ -485,6 +489,16 @@
 
       if (typeof window !== 'undefined' && !this._fullSnapshotsLoaded) {
         setTimeout(() => this._ensureFullSnapshots(), 50);
+      }
+      if (typeof window !== 'undefined' && !this._isLoreDetailLoaded()) {
+        const scheduleIdle =
+          typeof window.requestIdleCallback === 'function'
+            ? (fn) => window.requestIdleCallback(fn, { timeout: 200 })
+            : (fn) => setTimeout(fn, 80);
+        scheduleIdle(() => {
+          this._ensureLoreDetail();
+          this._ensureNarrator();
+        });
       }
     }
 
@@ -646,6 +660,150 @@
       return this._enLocalePromise;
     }
 
+    _ensureEventPinyin() {
+      if (window.ATLAS_EVENT_PINYIN) return Promise.resolve(true);
+      if (!this._eventPinyinPromise) {
+        this._eventPinyinPromise = this._loadScriptOnce(
+          this._lazyAssetUrl('js/event_pinyin.js', 'vPinyin')
+        ).then(() => {
+          if (window.ATLAS_EVENT_PINYIN) {
+            this.searchIndex = null;
+            return true;
+          }
+          this._eventPinyinPromise = null;
+          return false;
+        });
+      }
+      return this._eventPinyinPromise;
+    }
+
+    _hasZhHant() {
+      return Boolean(
+        typeof window !== 'undefined' &&
+          window.ZH_HANT_CONV &&
+          typeof window.ZH_HANT_CONV.toHant === 'function' &&
+          typeof window.ZH_HANT_CONV.toHans === 'function'
+      );
+    }
+
+    _ensureZhHant() {
+      if (this._hasZhHant()) {
+        return Promise.resolve(window.ZH_HANT_CONV);
+      }
+      if (!this._zhHantPromise) {
+        this._zhHantPromise = this._loadScriptOnce(
+          this._lazyAssetUrl('js/zh_hant.js', 'vHant')
+        ).then(() => {
+          if (this._hasZhHant()) {
+            this.searchIndex = null;
+            return window.ZH_HANT_CONV;
+          }
+          this._zhHantPromise = null;
+          return null;
+        });
+      }
+      return this._zhHantPromise;
+    }
+
+    _isQuizLoaded() {
+      return typeof this._buildChallengeDeck === 'function';
+    }
+
+    _ensureQuiz() {
+      if (this._isQuizLoaded()) return Promise.resolve(true);
+      if (!this._quizPromise) {
+        this._quizPromise = this._loadScriptOnce(
+          this._lazyAssetUrl('js/atlas_quiz.js', 'vQuiz')
+        ).then(() => {
+          if (this._isQuizLoaded()) return true;
+          this._quizPromise = null;
+          return false;
+        });
+      }
+      return this._quizPromise;
+    }
+
+    _openChallenge(opts = {}) {
+      if (this._isQuizLoaded()) {
+        this.startChallenge(opts);
+        return Promise.resolve(true);
+      }
+      return this._ensureQuiz().then((ok) => {
+        if (ok && typeof this.startChallenge === 'function') {
+          this.startChallenge(opts);
+        }
+        return ok;
+      });
+    }
+
+    _isNarratorLoaded() {
+      return typeof this.speakCurrentState === 'function';
+    }
+
+    _ensureNarrator() {
+      if (this._isNarratorLoaded()) return Promise.resolve(true);
+      if (!this._narratorPromise) {
+        this._narratorPromise = this._loadScriptOnce(
+          this._lazyAssetUrl('js/atlas_narrator.js', 'vNarrator')
+        ).then(() => {
+          if (this._isNarratorLoaded()) {
+            if (typeof this._probeNarratorSupport === 'function') this._probeNarratorSupport();
+            return true;
+          }
+          this._narratorPromise = null;
+          return false;
+        });
+      }
+      return this._narratorPromise;
+    }
+
+    _isLoreDetailLoaded() {
+      if (this._loreDetailLoaded) return true;
+      if (
+        typeof window !== 'undefined' &&
+        (window.ATLAS_LORE_DETAIL_LOADED ||
+          (window.ATLAS_LORE_DATA &&
+            Array.isArray(window.ATLAS_LORE_DATA.PLACE_LANDMARK_EVENTS) &&
+            window.ATLAS_LORE_DATA.PLACE_LANDMARK_EVENTS.length > 0))
+      ) {
+        this._loreDetailLoaded = true;
+        return true;
+      }
+      return false;
+    }
+
+    _ensureLoreDetail() {
+      if (this._isLoreDetailLoaded()) {
+        return Promise.resolve((typeof window !== 'undefined' && window.ATLAS_LORE_DATA) || {});
+      }
+      if (!this._loreDetailPromise) {
+        this._loreDetailPromise = this._loadScriptOnce(
+          this._lazyAssetUrl('js/lore_detail.js', 'vLore')
+        ).then(() => {
+          this._loreDetailLoaded = true;
+          this.searchIndex = null;
+          this._soloPersonEventsCache = null;
+          this._extraEnTermMap = null;
+          this._challengeBaseTiers = null;
+          if (this.grpSettlements && typeof this.grpSettlements.querySelectorAll === 'function') {
+            for (const el of this.grpSettlements.querySelectorAll('.settlement-node.is-pass')) {
+              const pk = el.dataset && el.dataset.passKey;
+              const pObj =
+                pk &&
+                (HistoricalAtlasController.STRATEGIC_PASSES || []).find((p) => p.key === pk);
+              if (pObj) {
+                el.dataset.chokepoint =
+                  (this.locale === 'en' ? pObj.chokepointEn : this._zh(pObj.chokepointZh || '')) ||
+                  '';
+              }
+            }
+          }
+          return (typeof window !== 'undefined' && window.ATLAS_LORE_DATA) || {};
+        });
+      }
+      return this._loreDetailPromise;
+    }
+
     _syncMobileOverlayState() {
       const wb = this._id('workspace-body');
       if (wb && wb.classList) {
@@ -750,7 +908,7 @@
       if (act === 'journey') {
         this.openJourneyAsPerson('xuanzang', -1);
       } else if (act === 'quiz') {
-        this.startChallenge();
+        this._openChallenge();
       } else if (act === 'search') {
         const box = this._id('map-search-box');
         const inp = this._id('inp-map-search');
@@ -841,6 +999,7 @@
       this.svg = this._id('atlas-svg');
       this.grpTerrain = this._id('grp-terrain');
       this.terrainTileLayer = this._id('grp-terrain-tiles');
+      this.grpPaleoSea = this._id('grp-paleo-sea');
       this.grpRivers = this._id('grp-rivers');
       this.grpNeighbors = this._id('grp-neighbors');
       this.grpProvinces = this._id('grp-provinces');
@@ -958,10 +1117,12 @@
     _getExtraEnTermMap() {
       const dictRef = (this.enLocale && this.enLocale.dict) || null;
       const hasKeys = this._hasEnDict();
+      const loreLoaded = this._isLoreDetailLoaded();
       if (
         this._extraEnTermMap &&
         this._extraEnTermMapDictRef === dictRef &&
-        this._extraEnTermMapHasKeys === hasKeys
+        this._extraEnTermMapHasKeys === hasKeys &&
+        this._extraEnTermMapLoreLoaded === loreLoaded
       ) {
         return this._extraEnTermMap;
       }
@@ -1038,6 +1199,7 @@
       this._extraEnTermMap = map;
       this._extraEnTermMapDictRef = dictRef;
       this._extraEnTermMapHasKeys = hasKeys;
+      this._extraEnTermMapLoreLoaded = loreLoaded;
       return map;
     }
 
@@ -1459,7 +1621,10 @@
       p.set('year', String(this.year));
       const person = this.activePerson;
       const personKeys = person && Array.isArray(person.profiles) ? person.profiles.map((pr) => String(pr.key || '')) : [];
-      if (personKeys.length && personKeys.every((k) => k && !k.startsWith('adhoc_'))) {
+      if (person && person.profile && person.profile.isStory && person.profile.key) {
+        p.set('event', String(person.profile.key));
+        if (this.activePersonEventIdx >= 0) p.set('stop', String(this.activePersonEventIdx));
+      } else if (personKeys.length && personKeys.every((k) => k && !k.startsWith('adhoc_'))) {
         p.set('person', personKeys.join(','));
         if (this.activePersonEventIdx >= 0) p.set('stop', String(this.activePersonEventIdx));
       } else {
@@ -1666,7 +1831,7 @@
 
       if (this.embed.autoplay && !this.embed.lock) {
         const q = new URLSearchParams(location.search);
-        if (q.has('person') || q.has('journey')) {
+        if (q.has('person') || q.has('event') || q.has('journey')) {
           // The trajectory opens asynchronously after the full snapshots load.
           let tries = 0;
           const timer = setInterval(() => {
@@ -1688,6 +1853,10 @@
     applyLocale() {
       if (this.locale === 'en' && !this._hasEnDict()) {
         this._ensureEnglishLocale().then(() => this.applyLocale());
+        return;
+      }
+      if (this.locale === 'zh-tw' && !this._hasZhHant()) {
+        this._ensureZhHant().then(() => this.applyLocale());
         return;
       }
       document.documentElement.lang =
@@ -1818,11 +1987,22 @@
       setMoreCopy('sub-more-story', 'From textbook maps to Jiangshan', '从课本插图到开源历史地图');
       setMoreCopy('lbl-more-about', 'About & More Projects', '作者博客 · 更多作品');
       setMoreCopy('sub-more-about', 'deanchen.me', 'deanchen.me');
-      setMoreCopy('lbl-more-github', 'GitHub Repository', 'GitHub 开源仓库');
-      setMoreCopy('sub-more-github', 'Star · Issues & contributions', 'Star · 捉虫与贡献代码');
       this._updateMusicUi();
       this._updateAutoplayUi();
       this._updatePlaySpeedUi();
+      const narratorBtn = this._id('act-narrator');
+      if (narratorBtn) {
+        if (typeof this._updateNarratorUi === 'function') {
+          this._updateNarratorUi();
+        } else {
+          const nTitle =
+            this.locale === 'en'
+              ? 'Autoplay with voice narration'
+              : this._zh('语音讲解（随自动播放朗读时间轴事件）');
+          narratorBtn.title = nTitle;
+          narratorBtn.setAttribute('aria-label', nTitle);
+        }
+      }
       this._renderStartGuide();
       this._id('gesture-guide').textContent = this.uiStr(
         'hint',
@@ -1878,6 +2058,7 @@
           this.locale === 'en' ? 'Year slider' : '年份滑块'
         );
       }
+      this._syncScrubberNavigator();
       const chroniclePane = this._id('chronicle-pane');
       if (chroniclePane) {
         chroniclePane.setAttribute(
@@ -1897,9 +2078,13 @@
           ? this.locale === 'en'
             ? 'Relic Provenance · Across Dynasties'
             : '点物溯史 · 传世国器流转'
-          : this.locale === 'en'
-            ? 'Person Chronicle · Life Across Time & Space'
-            : '点人溯事 · 人物生平纪事'
+          : this.activePerson.profile && this.activePerson.profile.isStory
+            ? this.locale === 'en'
+              ? 'Event Storyline · Multi-Act Chronicle'
+              : '点事溯局 · 历史大事件全脉络'
+            : this.locale === 'en'
+              ? 'Person Chronicle · Key Life Milestones'
+              : '点人溯事 · 生平大事记'
         : this.uiStr('trace_kicker', '点地溯源 · 古今政区沿革');
       const chalKicker = this._id('txt-challenge-kicker');
       if (chalKicker) {
@@ -2085,7 +2270,11 @@
         .filter((t) => (t.appear !== undefined || t.vanish !== undefined) && !t.tier)
         .map((t) => (this._isHydroVisible(t, y) ? '1' : '0'))
         .join('');
-      return `${rMask}:${lMask}:${tMask}`;
+      const pMask = (this.hydroData.paleoSea || [])
+        .filter((p) => p.appear !== undefined || p.vanish !== undefined)
+        .map((p) => (this._isHydroVisible(p, y) ? '1' : '0'))
+        .join('');
+      return `${rMask}:${lMask}:${tMask}:${pMask}`;
     }
 
     _hydroMask(year) {
@@ -2100,8 +2289,22 @@
     }
 
     _buildTerrainRivers() {
-      if (!this.grpRivers || !this.hydroData) return;
+      if (!this.hydroData) return;
       this.activeHydroMask = this._hydroMask(this.year);
+      if (this.grpPaleoSea) {
+        this.grpPaleoSea.innerHTML = '';
+        for (const ps of this.hydroData.paleoSea || []) {
+          if (!this._isHydroVisible(ps, this.year)) continue;
+          const d = this.projector.multiRingsToSvgPath(ps.polys || []);
+          if (!d) continue;
+          this._svgNode(
+            'path',
+            { d, class: 'paleo-sea', 'fill-rule': 'evenodd' },
+            this.grpPaleoSea
+          );
+        }
+      }
+      if (!this.grpRivers) return;
       this.grpRivers.innerHTML = '';
 
       // 1. Render lakes first (underneath river inflows/outflows)
@@ -3543,7 +3746,8 @@
           pNode.dataset.ancient = passDisplay;
           pNode.dataset.modern = this.locale === 'en' ? p.modernEn : this._zh(p.modernZh);
           pNode.dataset.remark = this.locale === 'en' ? p.rangeEn : this._zh(p.rangeZh);
-          pNode.dataset.chokepoint = this.locale === 'en' ? p.chokepointEn : this._zh(p.chokepointZh);
+          pNode.dataset.chokepoint =
+            (this.locale === 'en' ? p.chokepointEn : this._zh(p.chokepointZh || '')) || '';
           pNode.dataset.lng = String(p.coord[0]);
           pNode.dataset.lat = String(p.coord[1]);
           pNode.dataset.prefAlign = p.align || 'r';
@@ -4155,6 +4359,19 @@
       return idx !== undefined ? idx : null;
     }
 
+    // Invariant: each Event Storyline (`isStory: true` in PERSON_PROFILES) maps to
+    // EXACTLY ONE canonical milestone (`<dynastyKey>:<year>`) for its `[始末]` badge.
+    // Never attach `[始末]` to multiple milestones for the same story (enforced in suite_search_runtime.js).
+    _findStoryForMilestone(dynasty, m) {
+      if (!dynasty || !m) return null;
+      const map = {
+        'qin:-206': { key: 'chuhan', stopIdx: -1, titleZh: '楚汉之争' },
+        'tang:755': { key: 'anshi', stopIdx: -1, titleZh: '安史之乱' },
+        'beisong:1127': { key: 'jingkang', stopIdx: -1, titleZh: '靖康之变' },
+      };
+      return map[`${dynasty.key}:${m.year}`] || null;
+    }
+
     _measureMilestoneBalloonSize(estW = 0, estH = 0) {
       if (this.milestoneBalloon && this.milestoneBalloon.style) {
         const prevLeft = this.milestoneBalloon.style.left;
@@ -4274,17 +4491,26 @@
         relicStopIdx !== null
           ? `<button type="button" class="ep-relic-seal" title="${relicTitle}"><span class="seal-stamp">玺</span><span>${relicLabel}</span></button>`
           : '';
+      const storyHit = this._findStoryForMilestone(dynasty, m);
+      const storyTitle =
+        this.locale === 'en'
+          ? 'Open the full multi-act historical storyline on the map'
+          : `点击展开「${(storyHit && storyHit.titleZh) || '大事件'}」全脉络时空推演`;
+      const storyLabel = this.locale === 'en' ? 'Story ›' : '始末 ›';
+      const storyHtml = storyHit
+        ? `<button type="button" class="ep-relic-seal ep-story-seal" title="${storyTitle}"><span class="seal-stamp">事</span><span>${storyLabel}</span></button>`
+        : '';
       const closeTitle = this.locale === 'en' ? 'Dismiss event callout' : '关闭此事件浮签';
       const distanceText = this.formatDistanceFromUser(anchorCoord);
       this.milestoneBalloon.innerHTML =
-        `<div class="ep-head"><span class="ep-year">${yrText} · ${eraLabel}</span>${placeHtml}${relicHtml}<button type="button" class="ep-close" title="${closeTitle}" aria-label="${closeTitle}">×</button></div>` +
+        `<div class="ep-head"><span class="ep-year">${yrText} · ${eraLabel}</span>${placeHtml}${relicHtml}${storyHtml}<button type="button" class="ep-close" title="${closeTitle}" aria-label="${closeTitle}">×</button></div>` +
         `<div class="ep-text">${headlineText}</div>` +
         `<div class="ep-distance${distanceText ? '' : ' is-hidden'}">${distanceText}</div>`;
       const isMobile = typeof window !== 'undefined' && window.innerWidth <= 900;
       const maxW = isMobile ? Math.min(268, (window.innerWidth || 390) - 20) : 348;
       const headW =
         this._estimateLocalTextWidth(
-          `${yrText} · ${eraLabel}${placeEstText ? ` ${placeEstText}` : ''}${relicStopIdx !== null ? ` 玺 ${relicLabel}` : ''}`,
+          `${yrText} · ${eraLabel}${placeEstText ? ` ${placeEstText}` : ''}${relicStopIdx !== null ? ` 玺 ${relicLabel}` : ''}${storyHit ? ` 事 ${storyLabel}` : ''}`,
           11.5,
           0
         ) + (isMultiAnchor ? 40 + anchors.length * 22 : 52);
@@ -4321,11 +4547,18 @@
           this._panToward(targetCoord[0], targetCoord[1]);
         });
       });
-      const relicBtn = this.milestoneBalloon.querySelector('.ep-relic-seal');
+      const relicBtn = this.milestoneBalloon.querySelector('.ep-relic-seal:not(.ep-story-seal)');
       if (relicBtn && relicStopIdx !== null) {
         relicBtn.addEventListener('click', (e) => {
           e.stopPropagation();
           this.openPersonChronicle('yuxi', relicStopIdx);
+        });
+      }
+      const storyBtn = this.milestoneBalloon.querySelector('.ep-story-seal');
+      if (storyBtn && storyHit) {
+        storyBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.openPersonChronicle(storyHit.key, storyHit.stopIdx);
         });
       }
       const closeBtn = this.milestoneBalloon.querySelector('.ep-close');
@@ -4981,6 +5214,13 @@
         this._setPolityFocus(null);
         this._lastLegendKey = null;
         if (this.lastRenderedSnap) this._renderLegendBox(this.lastRenderedSnap);
+        if (!this._isLoreDetailLoaded()) {
+          this._ensureLoreDetail().then(() => {
+            if (this.eraFocus && cur && this.eraFocus.dynastyKey === cur.key && !this.activePolity) {
+              this.openPolity(title, { ...opts, zoom: false });
+            }
+          });
+        }
         return null;
       }
       this.eraFocus = null;
@@ -5000,6 +5240,13 @@
         this._ensureFullSnapshots().then(() => {
           const c = this.dynasties[this.dynastyIdx];
           if (this.activePolity === desc && c) this._renderChroniclePane(c);
+        });
+      }
+      if (!this._isLoreDetailLoaded()) {
+        this._ensureLoreDetail().then(() => {
+          if (this.activePolity === desc) {
+            this.openPolity(title, { ...opts, zoom: false });
+          }
         });
       }
       return desc;
@@ -5053,7 +5300,12 @@
       const prof = HistoricalAtlasController.POLITY_PROFILES.find(
         (p) => p.key === k || p.zh === key || String(p.en).toLowerCase() === k
       );
-      if (!prof) return null;
+      if (!prof) {
+        if (!this._isLoreDetailLoaded()) {
+          return this._ensureLoreDetail().then(() => this.openPolityByKey(key));
+        }
+        return null;
+      }
       const go = () => {
         const desc = { ...prof, curated: true };
         let y = this.year;
@@ -5522,9 +5774,6 @@
         entry.addEventListener('pointerenter', (e) => {
           if (e.pointerType !== 'touch') this._setPolityFocus(p.title);
         });
-        entry.addEventListener('pointerleave', (e) => {
-          if (e.pointerType !== 'touch') this._setPolityFocus(null);
-        });
         entry.addEventListener('click', () => {
           if (isEraFocused) this.clearEraFocus();
           else if (isActive) this.closePolity();
@@ -5559,12 +5808,14 @@
         entry.addEventListener('pointerenter', (e) => {
           if (e.pointerType !== 'touch') this._setPolityFocus('__neighbors__');
         });
-        entry.addEventListener('pointerleave', (e) => {
-          if (e.pointerType !== 'touch') this._setPolityFocus(null);
-        });
         entry.addEventListener('click', () => this.resetCamera());
         grid.appendChild(entry);
       }
+      // Cleared for the grid as a whole: per entry, crossing the gap between two entries
+      // flashed the unfocused map in between.
+      grid.addEventListener('pointerleave', (e) => {
+        if (e.pointerType !== 'touch') this._setPolityFocus(null);
+      });
       if (grid.firstChild) this.mapKey.appendChild(grid);
 
       if (snap.note) {
@@ -5635,13 +5886,15 @@
       if (this.activePerson) {
         const p = this.activePerson.profile;
         const pName = isEn ? p.en : p.zh;
+        const isStory = Boolean(p && p.isStory);
+        const paramKey = isStory ? 'event' : 'person';
         pageTitle = isEn
-          ? `${pName} — Historical Events Map · Jiangshan Atlas of China`
-          : `${pName}生平纪事地图 · 江山时序中国历史地图`;
+          ? `${pName} — ${isStory ? 'Event Storyline' : 'Historical Events'} Map · Jiangshan Atlas of China`
+          : `${pName}${isStory ? '历史大事件全脉络' : '生平纪事地图'} · 江山时序中国历史地图`;
         pageDesc = isEn
           ? `Interactive spatio-temporal chronicle of ${pName} across ${this.activePerson.events.length} historical sites in the Jiangshan Atlas of China.`
-          : `${pName}生平 ${this.activePerson.events.length} 处历史事件时空落点、历代疆域与古今地名对照。`;
-        canonicalUrl = `${baseSiteUrl}?person=${encodeURIComponent(p.key)}${isEn ? '&lang=en' : ''}`;
+          : `${pName}${isStory ? '' : '生平'} ${this.activePerson.events.length} 处历史事件时空落点、历代疆域与古今地名对照。`;
+        canonicalUrl = `${baseSiteUrl}?${paramKey}=${encodeURIComponent(p.key)}${isEn ? '&lang=en' : ''}`;
       } else if (cur && this._bootDone) {
         const dName = this.dynastyName(cur);
         const dSpan = this.formatSpan(cur);
@@ -5794,8 +6047,12 @@
           relicStopIdx !== null
             ? `<button type="button" class="ev-seal-tag" title="${this.locale === 'en' ? 'Heirloom Seal of the Realm — click to trace across dynasties' : '传国玉玺流转节点 · 点击查看历代流转轨迹'}">${this.locale === 'en' ? 'Seal' : '玺'}</button>`
             : '';
-        li.innerHTML = `<span class="ev-yr">${yrLabel}</span><span>${this.milestoneHeadline(dynasty, m)}${badge}${sealBadge}</span>`;
-        const sealBtn = li.querySelector('.ev-seal-tag');
+        const storyHit = this._findStoryForMilestone(dynasty, m);
+        const storyBadge = storyHit
+          ? `<button type="button" class="ev-seal-tag ev-story-tag" title="${this.locale === 'en' ? 'Event Storyline — click to trace the full multi-act campaign' : `大事件全脉络 · 点击展开「${storyHit.titleZh || '大事件'}」时空推演`}">${this.locale === 'en' ? 'Story' : '始末'}</button>`
+          : '';
+        li.innerHTML = `<span class="ev-yr">${yrLabel}</span><span>${this.milestoneHeadline(dynasty, m)}${badge}${sealBadge}${storyBadge}</span>`;
+        const sealBtn = li.querySelector('.ev-seal-tag:not(.ev-story-tag)');
         if (sealBtn && relicStopIdx !== null) {
           sealBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -5803,6 +6060,16 @@
               this.toggleMobileChronicle(false);
             }
             this.openPersonChronicle('yuxi', relicStopIdx);
+          });
+        }
+        const storyBtn = li.querySelector('.ev-story-tag');
+        if (storyBtn && storyHit) {
+          storyBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (window.innerWidth <= 900 && this.mobileChronicleOpen) {
+              this.toggleMobileChronicle(false);
+            }
+            this.openPersonChronicle(storyHit.key, storyHit.stopIdx);
           });
         }
         li.addEventListener('pointerenter', (e) => {
@@ -5821,8 +6088,13 @@
           if (window.innerWidth <= 900 && this.mobileChronicleOpen) {
             this.toggleMobileChronicle(false);
           }
-          this.jumpToYear(targetY);
-          this.openMilestoneBalloon(dynasty, m);
+          this._suppressChronicleAutoScroll = true;
+          try {
+            this.jumpToYear(targetY);
+            this.openMilestoneBalloon(dynasty, m);
+          } finally {
+            this._suppressChronicleAutoScroll = false;
+          }
           this._frameMilestoneAnchors(dynasty, m, {
             isMapChange: Boolean(snapShift || m.isMapChange),
           });
@@ -5856,6 +6128,7 @@
       if (this._isMobileViewport() && !this.mobileChronicleOpen) {
         return;
       }
+      const suppressCenterScroll = Boolean(this._suppressChronicleAutoScroll);
       if (this._chronicleScrollRaf) {
         cancelAnimationFrame(this._chronicleScrollRaf);
         this._chronicleScrollRaf = null;
@@ -5863,6 +6136,24 @@
       if (typeof requestAnimationFrame === 'function') {
         this._chronicleScrollRaf = requestAnimationFrame(() => {
           this._chronicleScrollRaf = null;
+          if (suppressCenterScroll) {
+            if (items[activeIdx] && pane.scrollHeight > pane.clientHeight) {
+              const el = items[activeIdx];
+              const elTop = el.offsetTop - pane.offsetTop;
+              const elBottom = elTop + el.offsetHeight;
+              const viewTop = pane.scrollTop;
+              const viewBottom = viewTop + pane.clientHeight;
+              if (elTop < viewTop) {
+                pane.scrollTo({ top: Math.max(0, elTop - 8), behavior: 'smooth' });
+              } else if (elBottom > viewBottom) {
+                pane.scrollTo({
+                  top: Math.max(0, elBottom - pane.clientHeight + 8),
+                  behavior: 'smooth',
+                });
+              }
+            }
+            return;
+          }
           if (activeIdx <= 0) {
             if (pane.scrollTop > 0) {
               pane.scrollTo({ top: 0, behavior: 'smooth' });
@@ -5879,3245 +6170,7 @@
       }
     }
 
-    // ---------------- Place Genealogy (Trace Place) ----------------
-    toggleGenealogySheetExpand(force) {
-      const cardEl = this._id('genealogy-card');
-      const btnEl = this._id('act-expand-genealogy');
-      const next =
-        typeof force === 'boolean'
-          ? force
-          : Boolean(cardEl && !cardEl.classList.contains('is-sheet-expanded'));
-      this.genealogySheetExpanded = next;
-      if (cardEl && cardEl.classList) {
-        cardEl.classList.toggle('is-sheet-expanded', next);
-      }
-      if (btnEl) {
-        btnEl.textContent = next ? '⤡' : '⤢';
-        btnEl.setAttribute('aria-expanded', String(next));
-        if (btnEl.classList) btnEl.classList.toggle('is-active', next);
-      }
-    }
-
-    _clearActiveTrace() {
-      if (this.activeTrace) this._scheduleUrlSync();
-      this.activeTrace = null;
-      this.activeTraceLabel = '';
-      this.activeReturnPerson = null;
-      if (this.grpGenealogy) this.grpGenealogy.innerHTML = '';
-      if (this.grpSettlements && typeof this.grpSettlements.querySelectorAll === 'function') {
-        this.grpSettlements
-          .querySelectorAll('.settlement-node.is-trace-city')
-          .forEach((el) => el.classList.remove('is-trace-city'));
-      }
-      this._syncTracedPrefecture();
-    }
-
-    _clearActivePerson() {
-      const hadTimer = Boolean(this.personTimer);
-      if (this.personTimer) {
-        clearInterval(this.personTimer);
-        this.personTimer = null;
-      }
-      if (hadTimer) this._updateAutoplayUi();
-      if (!this.activePerson) return;
-      this.activePerson = null;
-      this.activePersonEventIdx = -1;
-      this._scheduleUrlSync();
-      if (this.embed) this._syncEmbedBadge();
-      this._hidePersonFooter();
-      this._lastPersonPinZoom = 0;
-      this._lastPersonCardKey = null;
-      if (this.grpJourney && !this.activeCustomRoute) {
-        this.grpJourney.innerHTML = '';
-      }
-      const vf = this._id('viewport-frame');
-      if (vf) vf.classList.remove('has-active-person');
-      const kickerEl = this._id('txt-genealogy-kicker');
-      if (kickerEl) {
-        kickerEl.textContent = this.uiStr('trace_kicker', '点地溯源 · 古今政区沿革');
-      }
-      this._syncImmersivePaneState();
-      this._syncDocumentSeoMeta();
-    }
-
-    closeGenealogyCard() {
-      this._clearActiveTrace();
-      this._clearActivePerson();
-      this.toggleGenealogySheetExpand(false);
-      const cardEl = this._id('genealogy-card');
-      if (cardEl) cardEl.classList.add('is-hidden');
-      const loreEl = this._id('genealogy-lore');
-      if (loreEl) {
-        loreEl.innerHTML = '';
-        loreEl.classList.add('is-hidden');
-      }
-      const vf = this._id('viewport-frame');
-      if (vf) vf.classList.remove('has-active-genealogy');
-      this._syncMobileOverlayState();
-      if (Array.isArray(this.activeCustomRoute) && this.customRouteStopIdx >= 0) {
-        this.customRouteStopIdx = -1;
-        this._drawCustomRouteOverlay(this.activeCustomRoute);
-        this._renderCustomRouteCard();
-      }
-      if (this.activeMilestone) this._positionMilestoneBalloon();
-    }
-
-    static get PERSON_PROFILES() {
-      return (window.ATLAS_LORE_DATA && window.ATLAS_LORE_DATA.PERSON_PROFILES) || [];
-    }
-
-    _personSearchAliases(p) {
-      const out = [p.key, ...(p.aliases || [])].filter(Boolean);
-      if (p.courtesyEn) {
-        const roleRe =
-          /\b(general|marshal|minister|chancellor|historian|statesman|poet|master|author|founder|leader|commander|protector|adviser|strategist|admiral|commissioner|architect|governor|reformer|king|prince|lord|marquis|duke|instigator|recoverer|conqueror|empress\s+regnant)\b/i;
-        for (const seg of p.courtesyEn.split(/[,·/()]+/)) {
-          const clean = seg.trim();
-          if (clean.length >= 4 && !roleRe.test(clean)) out.push(clean);
-        }
-      }
-      return out.map((a) => String(a).toLowerCase());
-    }
-
-    _resolvePersonProfile(personOrQuery) {
-      if (!personOrQuery) return null;
-      if (typeof personOrQuery === 'object' && personOrQuery.zh) return personOrQuery;
-      const rawInput = String(personOrQuery).trim();
-      if (!rawInput) return null;
-      const rawHans = /[\u4e00-\u9fff]/.test(rawInput) ? this._toHans(rawInput) : rawInput;
-      const raw = rawHans === '海南藏族自治州' ? '海南州' : rawHans;
-      const qLow = raw.toLowerCase();
-      const fold = (s) =>
-        String(s || '')
-          .toLowerCase()
-          .replace(/['’‘`\-_.\s]+/g, '');
-      const qFold = fold(qLow);
-      const profiles = HistoricalAtlasController.PERSON_PROFILES;
-      const exact = profiles.find((p) => {
-        const aliases = this._personSearchAliases(p);
-        return (
-          p.key === qLow ||
-          p.zh.toLowerCase() === qLow ||
-          (p.en && (p.en.toLowerCase() === qLow || (qFold.length >= 3 && fold(p.en) === qFold))) ||
-          aliases.some((a) => a === qLow || (qFold.length >= 3 && fold(a) === qFold))
-        );
-      });
-      if (exact) return exact;
-      const partial = profiles.find((p) => {
-        const aliases = this._personSearchAliases(p);
-        return (
-          p.zh.includes(raw) ||
-          (p.en && p.en.toLowerCase().includes(qLow)) ||
-          aliases.some((a) => a.includes(qLow))
-        );
-      });
-      if (partial) return partial;
-      // Dynamic fallback strictly for historical monarchs in CHINESE_ERA_SPANS / REGIONAL_ERA_TRACKS
-      const allSpans = [
-        ...HistoricalAtlasController.CHINESE_ERA_SPANS,
-        ...HistoricalAtlasController.REGIONAL_ERA_TRACKS.flatMap((t) => t.spans || []),
-      ];
-      const matchingSpans = allSpans.filter((sp) => {
-        if (!sp[3]) return false;
-        const mZh = sp[3];
-        const shortM = mZh
-          .replace(/^(?:西|东|北|南|南朝|武周)/, '')
-          .replace(/^汉高帝$/, '汉高祖');
-        const mEn = (sp[4] || '').toLowerCase();
-        return (
-          mZh === raw ||
-          shortM === raw ||
-          (qLow.length >= 4 && mEn && (mEn === qLow || fold(mEn) === qFold))
-        );
-      });
-      if (!matchingSpans.length) return null;
-      const spanMin = matchingSpans[0][0] - 40;
-      const lastSpan = matchingSpans[matchingSpans.length - 1];
-      const mainIdx = HistoricalAtlasController.CHINESE_ERA_SPANS.indexOf(lastSpan);
-      const spanMax =
-        mainIdx >= 0 && mainIdx + 1 < HistoricalAtlasController.CHINESE_ERA_SPANS.length
-          ? HistoricalAtlasController.CHINESE_ERA_SPANS[mainIdx + 1][0] + 2
-          : lastSpan[0] + 45;
-      const courtesyZh = matchingSpans[0][3];
-      const courtesyEn = matchingSpans[0][4] || '';
-      const adhoc = {
-        key: `adhoc_${raw}`,
-        zh: raw,
-        en: courtesyEn || this.trTerm(raw),
-        courtesyZh: courtesyZh && courtesyZh !== raw ? courtesyZh : '历代帝王纪事',
-        courtesyEn: courtesyEn || 'Historical Monarch',
-        dynastyKey: null,
-        span: [spanMin, spanMax],
-        aliases: [],
-        tokens: Array.from(new Set([raw, courtesyZh].filter(Boolean))),
-        isMonarch: true,
-      };
-      return this._collectPersonEvents(adhoc).length ? adhoc : null;
-    }
-
-    _formatPersonSpan(span, isAdhoc = false) {
-      if (!span || isAdhoc || span.length < 2) return '';
-      const [y0, y1] = span;
-      if (y0 === undefined || y1 === undefined) return '';
-      if (this.locale === 'en') {
-        if (y0 <= 0 && y1 <= 0) return ` (${-y0}–${-y1} BCE)`;
-        if (y0 <= 0 && y1 > 0) return ` (${-y0} BCE – ${y1} CE)`;
-        return ` (${y0}–${y1})`;
-      }
-      const fZh = (y) => (y <= 0 ? `前${-y}` : `${y}`);
-      return `（${fZh(y0)}—${fZh(y1)}）`;
-    }
-
-    _tailorPersonEvent(profile, tokens, d, year, rawSite, rawSiteEn, rawCoord, textZh, textEn, src) {
-      let clausesZh = String(textZh || '').split(/；/);
-      let clausesEn = String(textEn || '').split(/;\s*/);
-      let matchedIdxs = [];
-      if (clausesZh.length > 1) {
-        matchedIdxs = clausesZh
-          .map((c, i) => (tokens.some((t) => c.includes(t)) ? i : -1))
-          .filter((i) => i >= 0);
-      } else if (src === 'M' && rawSite.includes('·') && textZh.includes('，')) {
-        const commaParts = textZh.split(/，/);
-        const mComma = commaParts
-          .map((c, i) => (tokens.some((t) => c.includes(t)) ? i : -1))
-          .filter((i) => i >= 0);
-        const siteParts = rawSite.split(/\s*·\s*/);
-        const otherMentionsOtherPersonOrSite = commaParts.some(
-          (c, idx) =>
-            !mComma.includes(idx) &&
-            /^(?:汉高祖刘邦|楚汉两军|常遇春|徐达|北元|张献忠)/.test(c.trim()) &&
-            siteParts.some((sp) =>
-              sp
-                .split(/[（）()]/)
-                .filter((part) => part.length >= 2)
-                .some((part) => c.includes(part))
-            )
-        );
-        if (mComma.length > 0 && mComma.length < commaParts.length && otherMentionsOtherPersonOrSite) {
-          clausesZh = commaParts;
-          clausesEn = String(textEn || '').split(/;\s*|,\s*(?=[A-Z])/);
-          matchedIdxs = mComma;
-        }
-      }
-      // Keep full milestone text if all clauses belong to this monarch (e.g. Yongle 1407/1409)
-      if (
-        matchedIdxs.length > 0 &&
-        matchedIdxs.length < clausesZh.length &&
-        !(profile.key === 'zhudi' && year === 1407)
-      ) {
-        textZh = matchedIdxs.map((i) => clausesZh[i].trim()).join('；');
-        if (clausesEn.length === clausesZh.length) {
-          const candEn = matchedIdxs.map((i) => clausesEn[i].trim()).join('; ');
-          const enTokens = String(profile.en || '')
-            .split(/\s+/)
-            .filter((w) => w.length >= 3 && !/^(?:Emperor|of|the)$/i.test(w));
-          if (!enTokens.length || enTokens.some((w) => candEn.includes(w))) {
-            textEn = candEn.charAt(0).toUpperCase() + candEn.slice(1);
-          }
-        }
-      }
-
-      let chosenSite = String(rawSite || '').trim();
-      let chosenCoord = rawCoord;
-      if (/[·→]/.test(chosenSite)) {
-        const cleanRawSite = chosenSite.replace(/（[^）]*[·/][^）]*）$/, '');
-        const siteParts = cleanRawSite
-          .split(/\s*[·→]\s*/)
-          .map((s) => s.trim())
-          .filter((s) => Boolean(s) && s !== '全国各省');
-        if (siteParts.length === 1) {
-          chosenSite = siteParts[0];
-        } else if (siteParts.length > 1) {
-          const toCorePlace = (sp) => {
-            const b = this._stripPromptParenthetical(sp);
-            const stripped = b.replace(/(?:郡|州|府|城|关)$/, '');
-            return stripped.length >= 2 ? stripped : b;
-          };
-          const subClauses = textZh.split(/[；，]/);
-          const personSubClause = subClauses
-            .filter((c) => tokens.some((t) => c.includes(t)))
-            .join('，');
-          let hitPart = personSubClause
-            ? siteParts.find((sp) => {
-                const bare = toCorePlace(sp);
-                return (
-                  (bare.length >= 2 && personSubClause.includes(bare)) ||
-                  (sp.length >= 4 && personSubClause.includes(sp.slice(-3)))
-                );
-              })
-            : null;
-          if (!hitPart) {
-            hitPart = siteParts.find((sp) => {
-              const bare = toCorePlace(sp);
-              return bare.length >= 2 && textZh.includes(bare);
-            });
-          }
-          if (!hitPart && matchedIdxs.length > 0 && matchedIdxs.length < clausesZh.length) {
-            const unmatchedText = clausesZh.filter((_, i) => !matchedIdxs.includes(i)).join('；');
-            const remaining = siteParts.filter((sp) => {
-              const subTokens = sp
-                .split(/[（）()]/)
-                .map((p) => toCorePlace(p.trim()))
-                .filter((p) => p.length >= 2);
-              return !subTokens.some((st) => unmatchedText.includes(st));
-            });
-            if (remaining.length === 1) hitPart = remaining[0];
-          }
-          if (!hitPart && clausesZh.length === siteParts.length && matchedIdxs.length === 1) {
-            hitPart = siteParts[matchedIdxs[0]];
-          }
-          if (!hitPart) {
-            let bestDist = Infinity;
-            for (const sp of siteParts) {
-              const r = this.resolvePlace(this._stripPromptParenthetical(sp), year, d);
-              if (r && r.kind !== 'event_site') {
-                const dist = this.projector.greatCircleKm(rawCoord, [r.lng, r.lat]);
-                if (dist < bestDist) {
-                  bestDist = dist;
-                  hitPart = sp;
-                }
-              }
-            }
-            if (!hitPart) hitPart = siteParts[0];
-          }
-          chosenSite = hitPart;
-          const bareChosen = this._stripPromptParenthetical(chosenSite);
-          const fallbackCoords = {
-            狄道: [104.62, 35.58],
-            湖县: [110.68, 34.52],
-            马陵: [115.42, 36.12],
-            珠崖: [110.33, 20.03],
-            喜峰口: [118.33, 40.42],
-            京师广渠门: [116.43, 39.89],
-            虎门: [113.67, 22.82],
-            六盘山: [106.2, 35.65],
-          };
-          if (fallbackCoords[bareChosen]) {
-            chosenCoord = fallbackCoords[bareChosen];
-          } else {
-            const resolved = this.resolvePlace(bareChosen, year, d);
-            if (resolved && resolved.kind !== 'event' && resolved.kind !== 'event_site') {
-              chosenCoord = [resolved.lng, resolved.lat];
-            }
-          }
-        }
-      }
-      let splitEnCandidate = '';
-      if (chosenSite !== rawSite && rawSiteEn && !/[\u4e00-\u9fff]/.test(rawSiteEn)) {
-        const cleanRawSite = String(rawSite || '')
-          .trim()
-          .replace(/（[^）]*[·/][^）]*）$/, '');
-        const zhParts = cleanRawSite
-          .split(/\s*[·→]\s*/)
-          .map((s) => s.trim())
-          .filter(Boolean);
-        const enParts = String(rawSiteEn)
-          .replace(/\([^)]*[·/][^)]*\)$/, '')
-          .split(/\s*(?:·|&|→)\s*/)
-          .map((s) => s.trim())
-          .filter(Boolean);
-        const idx = zhParts.indexOf(chosenSite);
-        if (idx >= 0 && enParts.length === zhParts.length) {
-          splitEnCandidate = enParts[idx];
-        }
-      }
-      const bareChosenSite = this._stripPromptParenthetical(chosenSite);
-      const candList = [
-        chosenSite === rawSite ? rawSiteEn : '',
-        this._enDict(chosenSite),
-        this._enDict(bareChosenSite),
-        d && (d.key === 'roc' || d.key === 'prc') ? this._enModernCity(bareChosenSite) : '',
-        splitEnCandidate,
-      ];
-      const chosenSiteEn =
-        candList.find((c) => c && !/[\u4e00-\u9fff]/.test(c)) || this._enDict(bareChosenSite);
-      return {
-        siteZh: chosenSite,
-        siteEn: chosenSiteEn,
-        coord: chosenCoord,
-        textZh,
-        textEn,
-      };
-    }
-
-    _collectPersonEvents(profile, opts = {}) {
-      if (!profile) return [];
-      const isMulti = Boolean(opts && opts.isMulti);
-      const peerKeys = Array.isArray(opts && opts.peerKeys) ? opts.peerKeys : [];
-      const canCacheSolo = !isMulti && !peerKeys.length && typeof profile === 'object';
-      const snapRef = canCacheSolo ? this.snapshots : null;
-      const snapFull = Boolean(snapRef && snapRef.s_prc);
-      const hasEn = canCacheSolo ? this._hasEnDict() : false;
-      const enRef = canCacheSolo ? this.enLocale : null;
-      if (canCacheSolo) {
-        if (!this._soloPersonEventsCache) this._soloPersonEventsCache = new WeakMap();
-        const hit = this._soloPersonEventsCache.get(profile);
-        if (
-          hit &&
-          hit.snapRef === snapRef &&
-          hit.snapFull === snapFull &&
-          hit.hasEn === hasEn &&
-          hit.enRef === enRef
-        ) {
-          return hit.events.map((ev) => ({ ...ev }));
-        }
-      }
-      const matchesPersonsTag = (item) =>
-        isMulti &&
-        !profile.isRelic &&
-        Array.isArray(item && item.persons) &&
-        item.persons.includes(profile.key) &&
-        item.persons.some((pk) => pk !== profile.key && peerKeys.includes(pk));
-      const tokens = profile.isRelic
-        ? []
-        : Array.from(new Set([profile.zh, ...(profile.tokens || [])].filter(Boolean)));
-      const [minY, maxY] = profile.span || [-403, 2026];
-      const raw = [];
-
-      const journeyStops = Array.isArray(profile.stops)
-        ? profile.stops
-        : profile.journeyKey
-          ? (
-              HistoricalAtlasController.HISTORICAL_JOURNEYS.find(
-                (item) => item.key === profile.journeyKey
-              ) || {}
-            ).stops
-          : null;
-      const hasJourneyStops = Array.isArray(journeyStops) && journeyStops.length > 0;
-      const jMinY = hasJourneyStops ? Math.min(...journeyStops.map((s) => s.year)) : Infinity;
-      const jMaxY = hasJourneyStops ? Math.max(...journeyStops.map((s) => s.year)) : -Infinity;
-      if (hasJourneyStops) {
-        journeyStops.forEach((st, sIdx) => {
-          const dyn =
-            this.dynasties[this._findDynastyIndex(st.year)] || this.dynasties[0];
-          raw.push({
-            src: 'J',
-            year: st.year,
-            month: st.month || 6 + sIdx * 0.01,
-            coord: st.coord,
-            fromCoord: st.fromCoord || null,
-            via: st.via || null,
-            prevStopCoord: sIdx > 0 ? journeyStops[sIdx - 1].coord : null,
-            quoteZh: st.quoteZh || '',
-            quoteEn: st.quoteEn || '',
-            dynasty: dyn,
-            siteZh: st.ancientZh,
-            siteEn: st.ancientEn || this._enDict(st.ancientZh),
-            modernZh: st.modernZh || '',
-            modernEn: st.modernEn || '',
-            textZh: `${st.titleZh}：${st.descZh}`,
-            textEn: `${st.titleEn}: ${st.descEn}`,
-            isMapChange: Boolean(st.isMapChange),
-            byPersonsTag: matchesPersonsTag(st),
-            journeyStopIdx: sIdx,
-            prio: 3,
-          });
-        });
-      }
-      if (isMulti && !profile.isRelic) {
-        for (const j of HistoricalAtlasController.HISTORICAL_JOURNEYS) {
-          if (j.key === profile.key || j.key === profile.journeyKey) continue;
-          (j.stops || []).forEach((st, sIdx) => {
-            if (!st.coord || st.year < minY - 2 || st.year > maxY + 3) return;
-            if (!matchesPersonsTag(st)) return;
-            const dyn =
-              this.dynasties[this._findDynastyIndex(st.year)] || this.dynasties[0];
-            raw.push({
-              src: 'J_CO',
-              year: st.year,
-              month: st.month || 6 + sIdx * 0.01,
-              coord: st.coord,
-              quoteZh: st.quoteZh || '',
-              quoteEn: st.quoteEn || '',
-              dynasty: dyn,
-              siteZh: st.ancientZh,
-              siteEn: st.ancientEn || this._enDict(st.ancientZh),
-              modernZh: st.modernZh || '',
-              modernEn: st.modernEn || '',
-              textZh: `${st.titleZh}：${st.descZh}`,
-              textEn: `${st.titleEn}: ${st.descEn}`,
-              isMapChange: Boolean(st.isMapChange),
-              byPersonsTag: true,
-              prio: 2.5,
-            });
-          });
-        }
-      }
-
-      for (const d of this.dynasties) {
-        for (const m of d.milestones || []) {
-          if (!m.coord || m.year < minY - 2 || m.year > maxY + 3) continue;
-          const byTag = matchesPersonsTag(m);
-          const byToken = tokens.some((tok) => m.headline.includes(tok));
-          if (!byToken && !byTag) continue;
-          if (hasJourneyStops && m.year >= jMinY && m.year <= jMaxY && !byTag) {
-            const jHit = raw.find((r) => r.src === 'J' && r.year === m.year);
-            if (jHit) {
-              if (m.isMapChange) jHit.isMapChange = true;
-              if (!jHit.milestone) jHit.milestone = m;
-            }
-            continue;
-          }
-          const rawSite = m.site || d.seat || '';
-          if (profile.key === 'liubang' && m.year === -207 && rawSite.startsWith('巨鹿')) continue;
-          if (profile.key === 'sunquan' && m.year === 230 && rawSite.startsWith('夷洲')) continue;
-          const mKey = `${d.key}:${m.year}`;
-          const mHit = this.enLocale.milestones && this.enLocale.milestones[mKey];
-          const rawSiteEn =
-            m.siteEn ||
-            (Array.isArray(mHit) && mHit[1]) ||
-            (d.key === 'roc' || d.key === 'prc'
-              ? this._enModernCity(rawSite)
-              : this._enDict(rawSite));
-          const tailored = this._tailorPersonEvent(
-            profile,
-            byTag && !/[·→]/.test(rawSite) ? [] : tokens,
-            d,
-            m.year,
-            rawSite,
-            rawSiteEn,
-            m.coord,
-            m.headline,
-            this._enMilestoneHeadline(d, m),
-            'M'
-          );
-          raw.push({
-            src: 'M',
-            year: m.year,
-            month:
-              m.month ||
-              (m.year === 208 && rawSite.includes('赤壁')
-                ? 11.0
-                : m.year === 219 && tailored.siteZh.includes('麦城')
-                  ? 11.5
-                  : (isMulti && m.year === 645 && rawSite.includes('辽东')) ||
-                      (m.year === 219 && tailored.siteZh.includes('汉中'))
-                    ? 7.5
-                    : 6.5),
-            coord: tailored.coord,
-            dynasty: d,
-            siteZh: tailored.siteZh,
-            siteEn: tailored.siteEn,
-            modernZh: '',
-            modernEn: '',
-            textZh: tailored.textZh,
-            textEn: tailored.textEn,
-            isMapChange: Boolean(m.isMapChange),
-            byPersonsTag: byTag,
-            milestone: m,
-            prio: 2,
-          });
-        }
-      }
-
-      for (const lm of HistoricalAtlasController.PLACE_LANDMARK_EVENTS) {
-        if (!lm.coord || !lm.zh || lm.year < minY - 2 || lm.year > maxY + 3) continue;
-        const byTag = matchesPersonsTag(lm);
-        const byToken = tokens.some((tok) => lm.zh.includes(tok));
-        if (!byToken && !byTag) continue;
-        if (hasJourneyStops && lm.year >= jMinY && lm.year <= jMaxY && !byTag) continue;
-        const d =
-          this.dynasties.find((dyn) => dyn.key === lm.dynastyKey) ||
-          this.dynasties[this._findDynastyIndex(lm.year)] ||
-          this.dynasties[0];
-        const rawSite = lm.site || '';
-        const rawSiteEn = lm.siteEn || this._enDict(rawSite);
-        const tailored = this._tailorPersonEvent(
-          profile,
-          byTag ? [] : tokens,
-          d,
-          lm.year,
-          rawSite,
-          rawSiteEn,
-          lm.coord,
-          lm.zh,
-          lm.en || lm.zh,
-          'L'
-        );
-        raw.push({
-          src: 'L',
-          year: lm.year,
-          month:
-            lm.month ||
-            (isMulti && lm.year === 208 && rawSite.includes('赤壁') ? 11.0 : 6.5),
-          coord: tailored.coord,
-          dynasty: d,
-          siteZh: tailored.siteZh,
-          siteEn: tailored.siteEn,
-          modernZh: '',
-          modernEn: '',
-          textZh: tailored.textZh,
-          textEn: tailored.textEn,
-          isMapChange: false,
-          byPersonsTag: byTag,
-          prio: 1,
-        });
-      }
-
-      raw.sort(
-        (a, b) =>
-          a.year - b.year || (a.month || 6.5) - (b.month || 6.5) || b.prio - a.prio
-      );
-      const deduped = [];
-      for (const ev of raw) {
-        const dup = deduped.find((prev) => {
-          const dy = Math.abs(prev.year - ev.year);
-          if (dy > 1) return false;
-          if (dy > 0 && (ev.byPersonsTag || prev.byPersonsTag)) return false;
-          const km = this.projector.greatCircleKm(prev.coord, ev.coord);
-          if (prev.src === ev.src) {
-            if (ev.src === 'J' || ev.src === 'J_CO') return false;
-            if (ev.src === 'M') return prev.year === ev.year && km < 45;
-            return prev.year === ev.year && km < 35;
-          }
-          const bPrev = this._stripPromptParenthetical(prev.siteZh);
-          const bCur = this._stripPromptParenthetical(ev.siteZh);
-          const sameCoreSite =
-            prev.year === ev.year &&
-            bPrev.length >= 2 &&
-            bCur.length >= 2 &&
-            (bPrev.includes(bCur) || bCur.includes(bPrev));
-          return sameCoreSite || (prev.year === ev.year && km < 65) || (dy <= 1 && km < 25);
-        });
-        if (dup) {
-          // A curated journey stop outranks a nearby milestone or landmark that
-          // merely mentions the person, whichever of the two sorted first.
-          const keep = ev.src === 'J' || (ev.src === 'J_CO' && dup.src !== 'J') ? ev : dup;
-          const drop = keep === ev ? dup : ev;
-          if (drop.isMapChange) keep.isMapChange = true;
-          if (drop.byPersonsTag) keep.byPersonsTag = true;
-          if (drop.milestone && !keep.milestone) keep.milestone = drop.milestone;
-          if (keep === ev) deduped[deduped.indexOf(dup)] = ev;
-          continue;
-        }
-        deduped.push(ev);
-      }
-      if (canCacheSolo && this._soloPersonEventsCache) {
-        this._soloPersonEventsCache.set(profile, {
-          snapRef,
-          snapFull,
-          hasEn,
-          enRef,
-          events: deduped.map((ev) => ({ ...ev })),
-        });
-      }
-      return deduped;
-    }
-
-    static get PERSON_TRACK_PALETTE() {
-      return ['#c4281c', '#233b8e', '#186a4b', '#7a2e68'];
-    }
-
-    _resolvePersonProfiles(personOrQuery) {
-      if (!personOrQuery) return [];
-      if (Array.isArray(personOrQuery)) {
-        const seen = new Set();
-        const out = [];
-        for (const item of personOrQuery) {
-          const p = this._resolvePersonProfile(item);
-          if (p && !seen.has(p.key)) {
-            seen.add(p.key);
-            out.push(p);
-          }
-        }
-        return out.slice(0, 4);
-      }
-      if (typeof personOrQuery === 'object' && personOrQuery.zh) {
-        return [personOrQuery];
-      }
-      const raw = String(personOrQuery || '').trim();
-      if (!raw) return [];
-      const isSpaceCjkPair = /^[\u4e00-\u9fff·]{2,6}(?:\s+[\u4e00-\u9fff·]{2,6})+$/.test(raw);
-      const hasExplicitDelim = /[,，;；×+、&]|\s+(?:vs\.?|and|with)\s+/i.test(raw);
-      if (isSpaceCjkPair || hasExplicitDelim) {
-        const parts = (
-          hasExplicitDelim
-            ? raw.split(/\s*(?:[,，;；×+、&]|\s+(?:vs\.?|and|with)\s+)\s*/i)
-            : raw.split(/\s+/)
-        )
-          .map((s) => s.trim())
-          .filter(Boolean);
-        if (parts.length >= 2) {
-          const seen = new Set();
-          const out = [];
-          for (const part of parts) {
-            const p = this._resolvePersonProfile(part);
-            if (p && !seen.has(p.key)) {
-              seen.add(p.key);
-              out.push(p);
-            }
-          }
-          if (out.length >= 2) return out.slice(0, 4);
-        }
-      }
-      const single = this._resolvePersonProfile(raw);
-      return single ? [single] : [];
-    }
-
-    _eventsSharePlace(evA, evB) {
-      if (!evA || !evB || !evA.coord || !evB.coord) return { hit: false, km: Infinity };
-      const km = this.projector.greatCircleKm(evA.coord, evB.coord);
-      if (km <= 45) return { hit: true, km };
-      const bareA = this._stripPromptParenthetical(evA.siteZh || '').replace(/(?:郡|州|府|县|城|关)$/, '');
-      const bareB = this._stripPromptParenthetical(evB.siteZh || '').replace(/(?:郡|州|府|县|城|关)$/, '');
-      if (bareA.length >= 2 && bareA === bareB && km < 85) {
-        return { hit: true, km };
-      }
-      return { hit: false, km };
-    }
-
-    _buildPersonTracksAndEvents(profiles) {
-      const palette = HistoricalAtlasController.PERSON_TRACK_PALETTE;
-      const isMultiReq = profiles.length >= 2;
-      const peerKeys = profiles.map((p) => p.key);
-      const tracks = [];
-      for (let pIdx = 0; pIdx < profiles.length; pIdx++) {
-        const p = profiles[pIdx];
-        const color = palette[pIdx % palette.length];
-        const rawEvs = this._collectPersonEvents(p, { isMulti: isMultiReq, peerKeys });
-        const pEvents = rawEvs.map((ev, sIdx) => ({
-          ...ev,
-          personIdx: pIdx,
-          personKey: p.key,
-          personZh: p.zh,
-          personEn: p.en,
-          personColor: color,
-          personStepIdx: sIdx,
-          personStepNum: sIdx + 1,
-        }));
-        for (let i = 0; i < pEvents.length; i++) {
-          pEvents[i].prevPersonEv = i > 0 ? pEvents[i - 1] : null;
-        }
-        if (pEvents.length) {
-          tracks.push({ profile: p, color, personIdx: pIdx, events: pEvents });
-        }
-      }
-      if (!tracks.length) return null;
-
-      if (tracks.length === 1) {
-        const singleEvents = tracks[0].events.map((ev, idx) => ({ ...ev, globalIdx: idx }));
-        return {
-          profile: tracks[0].profile,
-          profiles: [tracks[0].profile],
-          isMulti: false,
-          tracks,
-          events: singleEvents,
-          sameTimeCount: 0,
-          crossTimeCount: 0,
-          intersectPlaces: [],
-          intersectOnly: false,
-        };
-      }
-
-      // Only merge & highlight true contemporaneous encounters (same place <= 45km AND |Δyear| <= 3).
-      // Pair closest year/distance matches symmetrically across all track pairs (tA, tB) so 2-person and 3-person
-      // chronicles match with identical precision regardless of which subset of tracks is compared.
-      for (let tA = 0; tA < tracks.length; tA++) {
-        for (let tB = tA + 1; tB < tracks.length; tB++) {
-          const candPairs = [];
-          for (const evA of tracks[tA].events) {
-            for (const evB of tracks[tB].events) {
-              const dy = Math.abs(evA.year - evB.year);
-              if (dy > 3) continue;
-              const { hit, km } = this._eventsSharePlace(evA, evB);
-              if (!hit) continue;
-              candPairs.push({ evA, evB, dy, km });
-            }
-          }
-          candPairs.sort((a, b) => a.dy - b.dy || a.km - b.km);
-          const usedA = new Set();
-          const usedB = new Set();
-          for (const { evA, evB } of candPairs) {
-            if (usedA.has(evA) || usedB.has(evB)) continue;
-            if (!evA._peerLinks) evA._peerLinks = {};
-            if (!evB._peerLinks) evB._peerLinks = {};
-            evA._peerLinks[tB] = evB;
-            evB._peerLinks[tA] = evA;
-            usedA.add(evA);
-            usedB.add(evB);
-          }
-        }
-      }
-
-      const allRaw = tracks
-        .flatMap((t) => t.events)
-        .sort(
-          (a, b) =>
-            a.year - b.year ||
-            (a.month || 6.5) - (b.month || 6.5) ||
-            a.personIdx - b.personIdx
-        );
-
-      const merged = [];
-      let sameTimeCount = 0;
-      for (const evA of allRaw) {
-        if (evA._mergedIntoShared) continue;
-        const group = [evA];
-        const usedTracks = new Set([evA.personIdx]);
-        const queue = [evA];
-        while (queue.length > 0) {
-          const cur = queue.shift();
-          if (!cur._peerLinks) continue;
-          const peerIdxList = Object.keys(cur._peerLinks)
-            .map(Number)
-            .sort((a, b) => a - b);
-          for (const tIdx of peerIdxList) {
-            if (usedTracks.has(tIdx)) continue;
-            const cand = cur._peerLinks[tIdx];
-            if (!cand || cand._mergedIntoShared) continue;
-            if (
-              Math.abs(evA.year - cand.year) <= 3 &&
-              this._eventsSharePlace(evA, cand).hit
-            ) {
-              usedTracks.add(tIdx);
-              cand._mergedIntoShared = true;
-              group.push(cand);
-              queue.push(cand);
-            }
-          }
-        }
-        if (group.length >= 2) {
-          evA._mergedIntoShared = true;
-          group.sort((a, b) => a.personIdx - b.personIdx);
-          const primary = group[0];
-          for (let gIdx = 1; gIdx < group.length; gIdx++) {
-            group[gIdx].coord = [primary.coord[0], primary.coord[1]];
-          }
-          const textSource =
-            group.find((gEv) => gEv.src === 'J') ||
-            group.find((gEv) => gEv.src === 'M') ||
-            primary;
-          const participants = group.map((gEv) => ({
-            profile: tracks[gEv.personIdx].profile,
-            personIdx: gEv.personIdx,
-            personKey: gEv.personKey,
-            personZh: gEv.personZh,
-            personEn: gEv.personEn,
-            color: gEv.personColor,
-            stepIdx: gEv.personStepIdx,
-            stepNum: gEv.personStepNum,
-            year: gEv.year,
-            src: gEv.src,
-            byPersonsTag: Boolean(gEv.byPersonsTag),
-            textZh: gEv.textZh,
-            textEn: gEv.textEn,
-            quoteZh: gEv.quoteZh,
-            quoteEn: gEv.quoteEn,
-          }));
-          const uniqueNotes = [];
-          for (const pt of participants) {
-            const norm = String(pt.textZh || '').trim();
-            if (!norm) continue;
-            const dup = uniqueNotes.find(
-              (u) => u.textZh === norm || u.textZh.includes(norm) || norm.includes(u.textZh)
-            );
-            if (!dup) uniqueNotes.push(pt);
-          }
-          const isSameYearSharedEvent =
-            group.every((gEv) => gEv.year === primary.year) &&
-            (group.some((gEv) => gEv.byPersonsTag) ||
-              group.every((gEv) => gEv.src !== 'J'));
-          const qSource = participants.find((pt) => pt.quoteZh || pt.quoteEn) || textSource;
-          const sharedEv = {
-            ...primary,
-            textZh: textSource.textZh,
-            textEn: textSource.textEn,
-            isSharedEncounter: true,
-            isMapChange: group.some((gEv) => gEv.isMapChange),
-            participants,
-            distinctNotes:
-              !isSameYearSharedEvent && uniqueNotes.length > 1 ? uniqueNotes : null,
-            quoteZh: qSource.quoteZh || '',
-            quoteEn: qSource.quoteEn || '',
-            intersection: {
-              kind: 'same_time',
-              peers: participants.slice(1),
-            },
-          };
-          merged.push(sharedEv);
-          sameTimeCount++;
-        } else {
-          merged.push(evA);
-        }
-      }
-
-      merged.forEach((ev, idx) => {
-        ev.globalIdx = idx;
-      });
-
-      return {
-        profile: tracks[0].profile,
-        profiles: tracks.map((t) => t.profile),
-        isMulti: true,
-        tracks,
-        events: merged,
-        sameTimeCount,
-        crossTimeCount: 0,
-        intersectPlaces: merged.filter((e) => e.isSharedEncounter),
-      };
-    }
-
-    openPersonChronicle(personOrQuery, initialIdx = -1) {
-      const profiles = this._resolvePersonProfiles(personOrQuery);
-      if (!profiles.length) return false;
-      const state = this._buildPersonTracksAndEvents(profiles);
-      if (!state || !state.events.length) return false;
-      const { events } = state;
-      const stateKey = state.profiles.map((p) => p.key).join(',');
-
-      if (!this._fullSnapshotsLoaded) {
-        this._ensureFullSnapshots().then(() => {
-          if (
-            this.activePerson &&
-            this.activePerson.profiles.map((p) => p.key).join(',') === stateKey
-          ) {
-            this._renderPersonChronicleCard(true);
-          }
-        });
-      }
-      if (
-        this.locale === 'en' &&
-        (!this.enLocale || !this.enLocale.dict || !Object.keys(this.enLocale.dict).length)
-      ) {
-        this._ensureEnglishLocale().then(() => {
-          if (
-            this.activePerson &&
-            this.activePerson.profiles.map((p) => p.key).join(',') === stateKey
-          ) {
-            const rebuilt = this._buildPersonTracksAndEvents(profiles);
-            if (rebuilt) {
-              this.activePerson = rebuilt;
-            }
-            this._renderPersonPinsOverlay();
-            this._renderPersonChronicleCard(true);
-          }
-        });
-      }
-
-      this._recordGestureClick();
-      this._dismissTraceOnboarding();
-      this.stopAutoplay();
-      if (this.challenge) this.stopChallenge(true);
-      this.clearCustomRoute();
-      this.closeMilestoneBalloon();
-      this._clearActiveTrace();
-      if (this.ghostTimer) {
-        clearTimeout(this.ghostTimer);
-        this.ghostTimer = null;
-      }
-      if (this.grpGhostDiff) this.grpGhostDiff.innerHTML = '';
-      if (this.hoverTip) {
-        this.hoverTip.classList.add('is-hidden');
-        this.hoverTip.classList.remove('is-interactive');
-      }
-
-      this.activePerson = state;
-      this.activePersonEventIdx =
-        initialIdx >= 0 && initialIdx < events.length ? initialIdx : -1;
-      this._scheduleUrlSync();
-
-      const cardEl = this._id('genealogy-card');
-      if (cardEl) cardEl.classList.remove('is-hidden');
-      const vf = this._id('viewport-frame');
-      if (vf) vf.classList.add('has-active-genealogy', 'has-active-person');
-      this._syncImmersivePaneState();
-
-      const defaultAnchorEv =
-        this.activePersonEventIdx >= 0
-          ? events[this.activePersonEventIdx]
-          : events.find((e) => e.isSharedEncounter) || events[0];
-      this._inPersonSync = true;
-      this._runWithDeferredTypography(() => {
-        if (defaultAnchorEv) {
-          this.jumpToYear(this._clampYearToDynasty(defaultAnchorEv.dynasty, defaultAnchorEv.year));
-        }
-        this._renderPersonPinsOverlay();
-      });
-      this._inPersonSync = false;
-      this._renderPersonChronicleCard();
-      this._syncDocumentSeoMeta();
-
-      if (this.activePersonEventIdx >= 0) {
-        this._flyToPersonEvent(events[this.activePersonEventIdx]);
-      } else {
-        this._framePersonOverview();
-      }
-      return true;
-    }
-
-    openJourneyAsPerson(journeyKey, stopIdx = -1) {
-      if (!this.openPersonChronicle(journeyKey, -1)) return false;
-      if (stopIdx >= 0 && this.activePerson && this.activePerson.events.length) {
-        const matchIdx = this.activePerson.events.findIndex((ev) => ev.journeyStopIdx === stopIdx);
-        const targetIdx =
-          matchIdx >= 0 ? matchIdx : Math.min(this.activePerson.events.length - 1, stopIdx);
-        this.selectPersonEvent(targetIdx, true);
-      }
-      return true;
-    }
-
-    _personAutoplayTick() {
-      if (!this.activePerson || this.activePersonEventIdx + 1 >= this.activePerson.events.length) {
-        if (this.personTimer) {
-          clearInterval(this.personTimer);
-          this.personTimer = null;
-        }
-        this._updateAutoplayUi();
-        return;
-      }
-      this.stepPersonEvent(1);
-    }
-
-    togglePersonAutoplay() {
-      if (!this.activePerson || !this.activePerson.events.length) return;
-      if (this.personTimer) {
-        clearInterval(this.personTimer);
-        this.personTimer = null;
-        this._updateAutoplayUi();
-        return;
-      }
-      if (this.playing) {
-        this.stopAutoplay();
-      }
-      if (this.activePersonEventIdx < 0) {
-        this.selectPersonEvent(0, true);
-      }
-      this.personTimer = setInterval(
-        () => this._personAutoplayTick(),
-        this._personAutoplayIntervalMs()
-      );
-      this._updateAutoplayUi();
-    }
-
-    selectPersonEvent(idx, panCamera = true) {
-      if (!this.activePerson || !this.activePerson.events.length) return;
-      this._scheduleUrlSync();
-      const events = this.activePerson.events;
-      if (idx < 0) {
-        this.activePersonEventIdx = -1;
-        this._renderPersonPinsOverlay();
-        this._renderPersonChronicleCard(true);
-        if (panCamera) this._framePersonOverview();
-        return;
-      }
-      const clamped = Math.max(0, Math.min(events.length - 1, idx));
-      this.activePersonEventIdx = clamped;
-      const ev = events[clamped];
-      this.closeMilestoneBalloon();
-      this._inPersonSync = true;
-      this._runWithDeferredTypography(() => {
-        this.jumpToYear(this._clampYearToDynasty(ev.dynasty, ev.year));
-        this._renderPersonPinsOverlay();
-      });
-      this._inPersonSync = false;
-      this._renderPersonChronicleCard(true);
-      if (panCamera) this._flyToPersonEvent(ev);
-    }
-
-    stepPersonEvent(delta) {
-      if (!this.activePerson || !this.activePerson.events.length) return;
-      const len = this.activePerson.events.length;
-      const cur = this.activePersonEventIdx;
-      const next = cur < 0 ? (delta >= 0 ? 0 : len - 1) : (cur + delta + len) % len;
-      this.selectPersonEvent(next, true);
-    }
-
-    _getPersonVisibleTopFrac() {
-      if (typeof window === 'undefined' || window.innerWidth > 900) return 1;
-      const vf = this._id('viewport-frame');
-      const cardEl = this._id('genealogy-card');
-      if (
-        vf &&
-        cardEl &&
-        typeof vf.getBoundingClientRect === 'function' &&
-        typeof cardEl.getBoundingClientRect === 'function' &&
-        !cardEl.classList.contains('is-hidden')
-      ) {
-        const vfRect = vf.getBoundingClientRect();
-        const cRect = cardEl.getBoundingClientRect();
-        if (vfRect.height > 80 && cRect.height > 20 && cRect.top > vfRect.top + vfRect.height * 0.2) {
-          return Math.max(0.38, Math.min(0.9, (cRect.top - vfRect.top - 10) / vfRect.height));
-        }
-      }
-      return this.genealogySheetExpanded ? 0.38 : 0.56;
-    }
-
-    _getVisiblePersonTracks() {
-      if (!this.activePerson) return [];
-      const { tracks, isMulti, events } = this.activePerson;
-      if (!Array.isArray(tracks) || !tracks.length) {
-        return [{ color: '#bd2d22', personIdx: 0, events: events || [] }];
-      }
-      if (!isMulti || tracks.length <= 1) return tracks;
-
-      const curIdx = this.activePersonEventIdx;
-      const curEv = curIdx >= 0 ? events[curIdx] : null;
-      const curDynKey =
-        (curEv && curEv.dynasty && curEv.dynasty.key) ||
-        (this.dynasties[this.dynastyIdx] && this.dynasties[this.dynastyIdx].key) ||
-        '';
-      const spans = tracks.map((tr) => {
-        const yrs = (tr.events || []).map((e) => e.year);
-        return yrs.length ? [Math.min(...yrs), Math.max(...yrs)] : [this.year, this.year];
-      });
-
-      const primaryIdxs = new Set();
-      if (curEv) {
-        if (curEv.isSharedEncounter && Array.isArray(curEv.participants)) {
-          curEv.participants.forEach((pt) => primaryIdxs.add(pt.personIdx));
-        } else if (curEv.personIdx !== undefined) {
-          primaryIdxs.add(curEv.personIdx);
-        }
-      }
-      if (!primaryIdxs.size && curDynKey) {
-        tracks.forEach((tr, idx) => {
-          if ((tr.events || []).some((e) => e.dynasty && e.dynasty.key === curDynKey)) {
-            primaryIdxs.add(idx);
-          }
-        });
-      }
-      if (!primaryIdxs.size) {
-        let bestIdx = 0;
-        let bestDist = Infinity;
-        spans.forEach(([y0, y1], idx) => {
-          const d = this.year < y0 ? y0 - this.year : this.year > y1 ? this.year - y1 : 0;
-          if (d < bestDist) {
-            bestDist = d;
-            bestIdx = idx;
-          }
-        });
-        primaryIdxs.add(bestIdx);
-      }
-
-      return tracks.filter((tr, idx) => {
-        if (primaryIdxs.has(idx)) return true;
-        if (
-          curDynKey &&
-          (tr.events || []).some((e) => e.dynasty && e.dynasty.key === curDynKey)
-        ) {
-          return true;
-        }
-        const [b0, b1] = spans[idx];
-        for (const pIdx of primaryIdxs) {
-          const [a0, a1] = spans[pIdx];
-          if (a1 + 30 >= b0 && b1 + 30 >= a0) return true;
-        }
-        return false;
-      });
-    }
-
-    _framePersonOverview() {
-      if (!this.activePerson || !this.activePerson.events.length) return;
-      const evList = this.activePerson.events;
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-      for (const ev of evList) {
-        const [sx, sy] = this.projector.toScreen(ev.coord[0], ev.coord[1]);
-        if (sx < minX) minX = sx;
-        if (sx > maxX) maxX = sx;
-        if (sy < minY) minY = sy;
-        if (sy > maxY) maxY = sy;
-      }
-      const cx = (minX + maxX) * 0.5;
-      const cy = (minY + maxY) * 0.5;
-      const aspect = this._getViewportAspect();
-      // Embeds keep the place/person card at the top right like desktop, not as a bottom sheet.
-      const isDesktop = typeof window === 'undefined' || window.innerWidth > 900 || Boolean(this.embed);
-      if (!isDesktop) {
-        const visTopFrac = this._getPersonVisibleTopFrac();
-        const availFrac = Math.max(0.32, visTopFrac - 0.1);
-        const midFrac = 0.055 + availFrac * 0.5;
-        const effAspect = Math.max(0.34, aspect * availFrac);
-        const spanW = Math.max(maxX - minX + 125, (maxY - minY + 86) / effAspect) * 1.12;
-        const w = Math.max(300, Math.min(1380, spanW));
-        const h = w * aspect;
-        this._animateCameraTo({ x: cx - w * 0.5, y: cy - h * midFrac, w, h });
-        return;
-      }
-      const spanW =
-        Math.max((maxX - minX + 115) / 0.45, (maxY - minY + 115) / (aspect * 0.84)) * 1.06;
-      const w = Math.max(340, Math.min(1060, spanW));
-      const h = w * aspect;
-      this._animateCameraTo({
-        x: Math.max(-160, Math.min(1000 - w * 0.55, cx - w * 0.475)),
-        y: Math.max(-110, Math.min(700 - h + 130, cy - h * 0.46)),
-        w,
-        h,
-      });
-    }
-
-    _flyToPersonEvent(ev) {
-      if (!ev || !ev.coord) return;
-      const [tx, ty] = this.projector.toScreen(ev.coord[0], ev.coord[1]);
-      const aspect = this._getViewportAspect();
-      // Embeds keep the place/person card at the top right like desktop, not as a bottom sheet.
-      const isDesktop = typeof window === 'undefined' || window.innerWidth > 900 || Boolean(this.embed);
-      if (!isDesktop) {
-        const visTopFrac = this._getPersonVisibleTopFrac();
-        const w = Math.max(320, Math.min(this.camera.w, 460));
-        const h = w * aspect;
-        this._animateCameraTo({ x: tx - w * 0.5, y: ty - h * (visTopFrac * 0.5), w, h });
-        return;
-      }
-      const w = Math.max(340, Math.min(this.camera.w, 500));
-      const h = w * aspect;
-      this._animateCameraTo({ x: tx - w * 0.38, y: ty - h * 0.48, w, h });
-    }
-
-    _findNearestPersonPin(clientX, clientY, maxPx = 26) {
-      if (!this.activePerson || !this.grpJourney || !this.svg) return null;
-      const rect = this._cameraViewportRect || this.svg.getBoundingClientRect();
-      if (!rect.width || !rect.height) return null;
-      this._cameraViewportRect = rect;
-      const screenScale = Math.min(rect.width / this.camera.w, rect.height / this.camera.h);
-      const padX = (rect.width - this.camera.w * screenScale) * 0.5;
-      const padY = (rect.height - this.camera.h * screenScale) * 0.5;
-      const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
-      const z = 1000 / this.camera.w;
-      const boost = vw <= 640 ? 1.46 : vw <= 900 ? 1.22 : 1.0;
-      const localToPx = Math.max((1 / Math.sqrt(z)) * boost, 0.92 / Math.max(0.12, screenScale)) * screenScale;
-
-      let bestNode = null;
-      let bestDist = maxPx;
-      this.grpJourney.querySelectorAll('.journey-node').forEach((jn) => {
-        const sx = parseFloat(jn.getAttribute('data-x'));
-        const sy = parseFloat(jn.getAttribute('data-y'));
-        const ox = parseFloat(jn.getAttribute('data-ox') || '0');
-        const oy = parseFloat(jn.getAttribute('data-oy') || '0');
-        if (Number.isNaN(sx) || Number.isNaN(sy)) return;
-        const px = rect.left + padX + (sx - this.camera.x) * screenScale + ox * localToPx;
-        const py = rect.top + padY + (sy - this.camera.y) * screenScale + oy * localToPx;
-        const d = Math.hypot(clientX - px, clientY - py);
-        if (d <= bestDist) {
-          bestDist = d;
-          bestNode = jn;
-        }
-      });
-      return bestNode;
-    }
-
-    _renderPersonPinsOverlay() {
-      if (!this.grpJourney) return;
-      this.grpJourney.innerHTML = '';
-      if (!this.activePerson) return;
-
-      const { events, tracks, isMulti } = this.activePerson;
-      const curIdx = this.activePersonEventIdx;
-      const curEv = curIdx >= 0 ? events[curIdx] : null;
-      const allTracks =
-        Array.isArray(tracks) && tracks.length
-          ? tracks
-          : [{ color: '#bd2d22', personIdx: 0, events }];
-      const activeEraTracks = this._getVisiblePersonTracks();
-      const activeEraPersonIdxs = new Set(activeEraTracks.map((t) => t.personIdx));
-      const isTrackDimmed = (pIdx) =>
-        Boolean(isMulti && curIdx >= 0 && !activeEraPersonIdxs.has(pIdx));
-      const rawPts = events.map((ev) => this.projector.toScreen(ev.coord[0], ev.coord[1]));
-
-      // Compute zoom-invariant screen-space cluster offsets so co-located pins (e.g. Chang'an ① ②)
-      // never overlap at ANY zoom level on Desktop or Mobile while preserving exact data-x/data-y
-      // for _rescaleSvgTypography's automatic city label culling.
-      const clusters = rawPts.map(([sx, sy], i) => {
-        const peers = [];
-        rawPts.forEach(([ox, oy], j) => {
-          const oneSharedOneSolo =
-            isMulti &&
-            Boolean(events[i]?.isSharedEncounter) !== Boolean(events[j]?.isSharedEncounter);
-          const hit = oneSharedOneSolo
-            ? Math.abs(ox - sx) < 14.2 && Math.abs(oy - sy) < 9.5
-            : Math.hypot(ox - sx, oy - sy) < 6.5;
-          if (hit) peers.push(j);
-        });
-        if (isMulti) {
-          const sharedPeer = peers.find((pIdx) => events[pIdx] && events[pIdx].isSharedEncounter);
-          if (peers.includes(curIdx)) {
-            return {
-              ox: 0,
-              oy: 0,
-              ringR: 0,
-              isPrimary: i === curIdx,
-              isMultiCanonical: i === curIdx,
-              isCrossEraShared: false,
-              peers,
-            };
-          }
-          if (sharedPeer !== undefined) {
-            return {
-              ox: 0,
-              oy: 0,
-              ringR: 0,
-              isPrimary: i === sharedPeer,
-              isMultiCanonical: i === sharedPeer,
-              isCrossEraShared: false,
-              peers,
-            };
-          }
-          const myPersonIdx = events[i]?.personIdx;
-          const firstForPerson = peers.find((pIdx) => events[pIdx]?.personIdx === myPersonIdx);
-          const distinctPersons = Array.from(
-            new Set(peers.map((pIdx) => events[pIdx]?.personIdx))
-          ).sort((a, b) => a - b);
-          const pPos = distinctPersons.indexOf(myPersonIdx);
-          const ox =
-            distinctPersons.length > 1 ? (pPos - (distinctPersons.length - 1) * 0.5) * 6.4 : 0;
-          return {
-            ox,
-            oy: 0,
-            ringR: 0,
-            isPrimary: i === peers[0],
-            isMultiCanonical: i === firstForPerson,
-            isCrossEraShared: distinctPersons.length > 1,
-            peers,
-          };
-        }
-        if (peers.length <= 1) {
-          return { ox: 0, oy: 0, ringR: 0, isPrimary: true, isMultiCanonical: true, peers };
-        }
-        const pos = peers.indexOf(i);
-        if (peers.length === 2) {
-          return {
-            ox: pos === 0 ? -8.6 : 8.6,
-            oy: 0,
-            ringR: 2,
-            isPrimary: pos === 0,
-            isMultiCanonical: true,
-            peers,
-          };
-        }
-        const ringR = Math.max(9.6, 8.3 / Math.sin(Math.PI / peers.length));
-        const angle = -Math.PI * 0.75 + (pos / peers.length) * Math.PI * 2;
-        return {
-          ox: Math.cos(angle) * ringR,
-          oy: Math.sin(angle) * ringR,
-          ringR,
-          isPrimary: pos === 0,
-          isMultiCanonical: true,
-          peers,
-        };
-      });
-
-      // 1. Render understated cartographic trajectory arcs + directional chevrons below pins
-      // Render dimmed cross-era tracks first so the active era's track sits cleanly on top
-      const orderedTracks = allTracks
-        .slice()
-        .sort((a, b) => (isTrackDimmed(b.personIdx) ? 1 : 0) - (isTrackDimmed(a.personIdx) ? 1 : 0));
-      for (const tr of orderedTracks) {
-        const trEvs = tr.events || [];
-        const segments = [];
-        const bias = isMulti ? (tr.personIdx - (allTracks.length - 1) * 0.5) * 7.5 : 0;
-        for (let i = 0; i < trEvs.length - 1; i++) {
-          const prevEv = trEvs[i];
-          const nextEv = trEvs[i + 1];
-          const keepsCuratedLeg =
-            Boolean(nextEv.via || nextEv.fromCoord) &&
-            nextEv.prevStopCoord &&
-            Math.hypot(
-              prevEv.coord[0] - nextEv.prevStopCoord[0],
-              prevEv.coord[1] - nextEv.prevStopCoord[1]
-            ) < 1.2;
-          const segInfo = this._buildJourneySegmentInfo(
-            keepsCuratedLeg && nextEv.fromCoord ? nextEv.fromCoord : prevEv.coord,
-            nextEv.coord,
-            keepsCuratedLeg ? nextEv.via : null,
-            bias
-          );
-          if (segInfo) {
-            segments.push({ ...segInfo, toIdx: i + 1 });
-          }
-        }
-        const dimmed = isTrackDimmed(tr.personIdx);
-        let trCurIdx = -1;
-        if (curEv && !dimmed) {
-          if (!isMulti) {
-            trCurIdx = curIdx;
-          } else if (curEv.isSharedEncounter && Array.isArray(curEv.participants)) {
-            const matchedPt = curEv.participants.find((pt) => pt.personIdx === tr.personIdx);
-            if (matchedPt) trCurIdx = matchedPt.stepIdx;
-          } else if (curEv.personIdx === tr.personIdx) {
-            trCurIdx = curEv.personStepIdx !== undefined ? curEv.personStepIdx : curIdx;
-          }
-        }
-        this._renderCartographicTrajectory(segments, trCurIdx, tr.color || '#bd2d22', dimmed);
-      }
-
-      // Deduplicate city labels so repeated visits to the same city only print its name once
-      const labelOwnerByIdx = new Set();
-      const placedCityLabels = [];
-      const labelPriorityOrder = events
-        .map((_, idx) => idx)
-        .sort((a, b) => {
-          if (a === curIdx) return -1;
-          if (b === curIdx) return 1;
-          const sa = events[a].isSharedEncounter ? 1 : 0;
-          const sb = events[b].isSharedEncounter ? 1 : 0;
-          if (sa !== sb) return sb - sa;
-          return a - b;
-        });
-      for (const idx of labelPriorityOrder) {
-        const ev = events[idx];
-        const [sx, sy] = rawPts[idx];
-        const fullLbl =
-          this.locale === 'en' ? ev.siteEn || this.trTerm(ev.siteZh) : this._zh(ev.siteZh);
-        const baseCity = fullLbl.replace(/\s*[（(][^）)]*[）)]\s*/g, '').trim() || fullLbl;
-        const dup = placedCityLabels.some(
-          (item) =>
-            Math.hypot(item.sx - sx, item.sy - sy) < 9 ||
-            (item.baseCity === baseCity && Math.hypot(item.sx - sx, item.sy - sy) < 28)
-        );
-        if (!dup) {
-          labelOwnerByIdx.add(idx);
-          placedCityLabels.push({ sx, sy, baseCity });
-        }
-      }
-
-      const order = events
-        .map((_, idx) => idx)
-        .sort((a, b) => {
-          if (a === curIdx) return 1;
-          if (b === curIdx) return -1;
-          if (isMulti) {
-            const da = isTrackDimmed(events[a].personIdx) ? 1 : 0;
-            const db = isTrackDimmed(events[b].personIdx) ? 1 : 0;
-            if (da !== db) return db - da;
-            const sa = events[a].isSharedEncounter ? 1 : 0;
-            const sb = events[b].isSharedEncounter ? 1 : 0;
-            if (sa !== sb) return sa - sb;
-          }
-          return a - b;
-        });
-
-      for (const idx of order) {
-        const cl = clusters[idx];
-        if (isMulti && !cl.isMultiCanonical) continue;
-        const ev = events[idx];
-        const [sx, sy] = rawPts[idx];
-        const isCur = idx === curIdx;
-        const isShared = Boolean(
-          ev.isSharedEncounter && Array.isArray(ev.participants) && ev.participants.length >= 2
-        );
-        const dimmed = !isShared && !isCur && isTrackDimmed(ev.personIdx);
-        const isPeerPassed =
-          curIdx < 0 || dimmed
-            ? true
-            : isMulti && curEv
-              ? ev.year <= curEv.year
-              : idx < curIdx;
-        const stateCls =
-          curIdx < 0 ? 'is-passed' : isCur ? 'is-current' : isPeerPassed ? 'is-passed' : 'is-upcoming';
-        const isMultiBead = isMulti && !isShared && !isCur;
-        const intersectCls = isShared ? ' is-intersect' : isMultiBead ? ' is-multi-bead' : '';
-        const dimCls = dimmed ? ' is-other-era' : '';
-        const pinColor = ev.personColor || '#bd2d22';
-
-        const g = this._svgNode(
-          'g',
-          {
-            class: `journey-node ${stateCls}${intersectCls}${dimCls}`,
-            'data-x': sx.toFixed(1),
-            'data-y': sy.toFixed(1),
-            'data-ox': cl.ox.toFixed(2),
-            'data-oy': cl.oy.toFixed(2),
-            'data-base-ox': cl.ox.toFixed(2),
-            'data-base-oy': cl.oy.toFixed(2),
-            'data-stop-idx': String(idx),
-            ...(isMulti && cl.peers && cl.peers.length > 1
-              ? { 'data-peer-idxs': `,${cl.peers.join(',')},` }
-              : {}),
-          },
-          this.grpJourney
-        );
-        g.style.color = pinColor;
-        if (dimmed) g.style.opacity = '0.36';
-
-        const inner = this._svgNode(
-          'g',
-          {
-            class: 'jn-pin-shift',
-            transform: `translate(${cl.ox.toFixed(2)},${cl.oy.toFixed(2)})`,
-          },
-          g
-        );
-
-        this._svgNode(
-          'circle',
-          { class: 'jn-hit', r: isShared ? 15 : isMultiBead ? 10 : 14, fill: 'transparent' },
-          inner
-        );
-        if (isShared) {
-          const parts = ev.participants;
-          const rDot = isCur ? 4.3 : 3.8;
-          const sep = isCur ? 9.2 : 8.2;
-          const pad = isCur ? 3.2 : 2.8;
-          const pillW = (parts.length - 1) * sep + rDot * 2 + pad;
-          const pillH = rDot * 2 + pad;
-          if (isCur) {
-            this._svgNode(
-              'rect',
-              {
-                class: 'jn-pulse-pill',
-                x: (-pillW * 0.5 - 2.2).toFixed(1),
-                y: (-pillH * 0.5 - 2.2).toFixed(1),
-                width: (pillW + 4.4).toFixed(1),
-                height: (pillH + 4.4).toFixed(1),
-                rx: (pillH * 0.5 + 2.2).toFixed(1),
-              },
-              inner
-            );
-          }
-          this._svgNode(
-            'rect',
-            {
-              class: 'jn-meet-pill',
-              x: (-pillW * 0.5).toFixed(1),
-              y: (-pillH * 0.5).toFixed(1),
-              width: pillW.toFixed(1),
-              height: pillH.toFixed(1),
-              rx: (pillH * 0.5).toFixed(1),
-            },
-            inner
-          );
-          parts.forEach((pt, k) => {
-            const dx = (k - (parts.length - 1) * 0.5) * sep;
-            const dot = this._svgNode(
-              'circle',
-              {
-                class: 'jn-disc is-meet-dot',
-                cx: dx.toFixed(1),
-                cy: '0',
-                r: rDot,
-              },
-              inner
-            );
-            dot.style.color = pt.color;
-          });
-        } else if (isMultiBead) {
-          this._svgNode('circle', { class: 'jn-disc is-waypoint-bead', r: 4.1 }, inner);
-        } else {
-          if (isCur) {
-            this._svgNode('circle', { class: 'jn-pulse', r: 11.8 }, inner);
-          }
-          this._svgNode('circle', { class: 'jn-disc', r: isCur ? 7.6 : 5.8 }, inner);
-          if (!isMulti) {
-            const numTxt = this._svgNode('text', { class: 'jn-num', y: '0.5' }, inner);
-            numTxt.textContent = String(ev.personStepNum || idx + 1);
-          }
-        }
-
-        const showStartLbl = isMulti && ev.personStepIdx === 0 && !dimmed;
-        if (labelOwnerByIdx.has(idx) || (isMulti && (isShared || isCur || showStartLbl))) {
-          const fullLbl =
-            this.locale === 'en' ? ev.siteEn || this.trTerm(ev.siteZh) : this._zh(ev.siteZh);
-          const compactLbl = isCur
-            ? fullLbl
-            : fullLbl.replace(/\s*[（(][^）)]*[）)]\s*/g, '').trim() || fullLbl;
-          const hideUntilHover = isMultiBead && !showStartLbl;
-          const lblTxt = this._svgNode(
-            'text',
-            {
-              class: `jn-label${isShared ? ' is-intersect-label' : ''}${
-                hideUntilHover ? ' is-hover-only-label' : ''
-              }`,
-              x: '0',
-              y: isShared ? '-9.8' : isMultiBead ? '-8.2' : '-11.5',
-            },
-            inner
-          );
-          lblTxt.textContent = compactLbl;
-        }
-      }
-
-      this._invalidateTypographyLayout();
-      this._rescaleSvgTypography();
-    }
-
-    _setHoveredPersonPin(idx) {
-      if (!this.grpJourney) return;
-      this.grpJourney.querySelectorAll('.journey-node').forEach((jn) => {
-        const directHit = Number(jn.dataset.stopIdx) === idx;
-        const peerHit =
-          idx >= 0 &&
-          jn.dataset.peerIdxs !== undefined &&
-          jn.dataset.peerIdxs.includes(`,${idx},`);
-        jn.classList.toggle('is-hover-pin', directHit || peerHit);
-      });
-    }
-
-    _renderPersonChronicleCard(preserveScroll = false) {
-      if (!this.activePerson) return;
-      const {
-        profile,
-        profiles,
-        isMulti,
-        tracks,
-        events,
-        sameTimeCount,
-      } = this.activePerson;
-      const curIdx = this.activePersonEventIdx;
-      const isEn = this.locale === 'en';
-      const isAdhoc = String(profile.key || '').startsWith('adhoc_');
-      const listEl = this._id('genealogy-timeline');
-      const stateKey = (profiles || [profile]).map((p) => p.key).join(',');
-      const personCardKey = `${stateKey}:${this._effectiveRenderedLocale()}:${events.length}`;
-      if (
-        preserveScroll &&
-        this._lastPersonCardKey === personCardKey &&
-        listEl &&
-        listEl.children &&
-        listEl.children.length > 0
-      ) {
-        const ovBtn = this._id('act-person-overview');
-        if (ovBtn) ovBtn.classList.toggle('is-active', curIdx < 0);
-        this._renderPersonFooter(events, curIdx, isEn);
-        if (this.locale === 'zh-tw') this._applyZhHantDom(this._id('genealogy-foot'));
-        let activeLi = null;
-        Array.from(listEl.children).forEach((li) => {
-          const rowIdx = Number(li.dataset.evIdx);
-          const isCur = rowIdx === curIdx;
-          li.classList.toggle('is-current', isCur);
-          if (isCur) activeLi = li;
-        });
-        if (activeLi && typeof activeLi.scrollIntoView === 'function') {
-          if (this._personScrollRaf) cancelAnimationFrame(this._personScrollRaf);
-          if (typeof requestAnimationFrame === 'function') {
-            this._personScrollRaf = requestAnimationFrame(() => {
-              this._personScrollRaf = null;
-              if (activeLi) activeLi.scrollIntoView({ block: 'nearest' });
-            });
-          } else {
-            activeLi.scrollIntoView({ block: 'nearest' });
-          }
-        }
-        return;
-      }
-      this._lastPersonCardKey = personCardKey;
-
-      const kickerEl = this._id('txt-genealogy-kicker');
-      if (kickerEl) {
-        kickerEl.textContent = profile.isRelic
-          ? isEn
-            ? 'Relic Provenance · Across Dynasties'
-            : '点物溯史 · 传世国器流转'
-          : isEn
-            ? 'Person Chronicle · Life Across Time & Space'
-            : '点人溯事 · 人物生平纪事';
-      }
-
-      const headingEl = this._id('genealogy-heading');
-      if (headingEl) {
-        if (isMulti) {
-          headingEl.innerHTML = tracks
-            .map((tr) => {
-              const name = escHtml(isEn ? tr.profile.en : tr.profile.zh);
-              return (
-                `<span class="mp-title-person" style="--track-color:${tr.color}">` +
-                `<button type="button" class="mp-title-solo" data-solo-key="${escHtml(tr.profile.key)}" title="${
-                  isEn ? 'View solo chronicle' : '单独查看此人行迹'
-                }">` +
-                `<span class="mp-title-dot" style="background:${tr.color}"></span>` +
-                `<span>${name}</span>` +
-                `</button>` +
-                `<button type="button" class="mp-title-remove" data-remove-key="${escHtml(tr.profile.key)}" title="${
-                  isEn ? 'Remove' : '移除'
-                }">×</button>` +
-                `</span>`
-              );
-            })
-            .join('<span class="mp-title-sep">×</span>');
-          headingEl.querySelectorAll('.mp-title-solo').forEach((btn) => {
-            btn.addEventListener('click', () => {
-              const soloKey = btn.dataset.soloKey;
-              const visTracks = this._getVisiblePersonTracks();
-              const isAlreadySoleOnMap =
-                visTracks.length === 1 && visTracks[0].profile && visTracks[0].profile.key === soloKey;
-              if (!isAlreadySoleOnMap && visTracks.every((t) => !t.profile || t.profile.key !== soloKey)) {
-                const firstIdx = events.findIndex((e) => e.personKey === soloKey);
-                if (firstIdx >= 0) {
-                  this.selectPersonEvent(firstIdx, true);
-                  return;
-                }
-              }
-              this.openPersonChronicle(soloKey, -1);
-            });
-          });
-          headingEl.querySelectorAll('.mp-title-remove').forEach((btn) => {
-            btn.addEventListener('click', () => {
-              const rem = profiles.filter((p) => p.key !== btn.dataset.removeKey);
-              if (rem.length) this.openPersonChronicle(rem, -1);
-            });
-          });
-        } else {
-          const spanStr = this._formatPersonSpan(profile.span, isAdhoc);
-          headingEl.textContent = `${isEn ? profile.en : profile.zh}${spanStr}`;
-        }
-      }
-
-      const loreEl = this._id('genealogy-lore');
-      if (loreEl) {
-        if (isMulti) {
-          loreEl.innerHTML = '';
-          loreEl.classList.add('is-hidden');
-        } else {
-          const subTitle = isEn ? profile.courtesyEn || '' : profile.courtesyZh || '';
-          const enAliases = (profile.aliases || []).filter((a) => !/[\u4e00-\u9fff]/.test(a));
-          const aliasHint = isEn
-            ? enAliases.length
-              ? `Also searched as: ${enAliases.slice(0, 4).join(' · ')}`
-              : ''
-            : profile.aliases && profile.aliases.length
-              ? `字号 / 检索词：${profile.aliases.slice(0, 4).join(' · ')}`
-              : '';
-          const badgeLabel = profile.isRelic
-            ? isEn
-              ? 'Imperial Relic'
-              : '国器本纪'
-            : isEn
-              ? 'Biography'
-              : '人物小传';
-          const descText = profile.isRelic
-            ? (isEn ? profile.descEn : profile.descZh) || aliasHint
-            : aliasHint;
-
-          if (subTitle || descText) {
-            loreEl.innerHTML =
-              `<div class="pass-lore-head"><span class="pass-lore-badge">${badgeLabel}</span><span class="pass-lore-range">${subTitle}</span></div>` +
-              (descText ? `<div class="pass-lore-desc">${descText}</div>` : '');
-            loreEl.classList.remove('is-hidden');
-          } else {
-            loreEl.innerHTML = '';
-            loreEl.classList.add('is-hidden');
-          }
-        }
-      }
-
-      const dynCount = new Set(events.map((e) => e.dynasty.key)).size;
-      const subEl = this._id('genealogy-sub');
-      if (subEl) {
-        const encounterSuffix =
-          isMulti && sameTimeCount > 0
-            ? isEn
-              ? ` · ${sameTimeCount} shared`
-              : ` · ${sameTimeCount} 处同途`
-            : '';
-        const summaryTxt = isEn
-          ? `${events.length} events · ${dynCount} era${dynCount > 1 ? 's' : ''}${encounterSuffix}`
-          : `共 ${events.length} 处史事 · 历 ${dynCount} 朝${encounterSuffix}`;
-        subEl.innerHTML =
-          `<span>${summaryTxt}</span>` +
-          `<span class="person-sub-actions">` +
-          `<button type="button" class="gen-filter-pill${
-            curIdx < 0 ? ' is-active' : ''
-          }" id="act-person-overview">${isEn ? 'Overview' : '全图总览'}</button>` +
-          `</span>`;
-
-        const ovBtn = this._id('act-person-overview');
-        if (ovBtn) {
-          ovBtn.addEventListener('click', () => {
-            this.selectPersonEvent(-1, true);
-          });
-        }
-      }
-      this._renderPersonFooter(events, curIdx, isEn);
-
-      const scrollEl = this._id('genealogy-body') || listEl;
-      const prevScroll = scrollEl && preserveScroll ? scrollEl.scrollTop : 0;
-      if (!listEl) return;
-      listEl.innerHTML = '';
-
-      let activeLi = null;
-      let firstSharedLi = null;
-      events.forEach((ev, idx) => {
-        const isShared = Boolean(ev.isSharedEncounter);
-        const li = document.createElement('li');
-        const intersectRowCls = isShared ? ' is-intersect-row' : '';
-        li.className = `person-ev-row${idx === curIdx ? ' is-current' : ''}${intersectRowCls}`;
-        li.dataset.evIdx = String(idx);
-        if (idx === curIdx) activeLi = li;
-        if (isShared && !firstSharedLi) firstSharedLi = li;
-
-        const yrStr = isEn
-          ? this.formatYear(ev.year)
-          : `${ev.year <= 0 ? '前' + -ev.year : ev.year}年`;
-        const siteLabel = isEn
-          ? ev.siteEn || this.trTerm(ev.siteZh)
-          : ev.siteZh + (ev.modernZh && !ev.siteZh.includes(ev.modernZh) ? `（今${ev.modernZh}）` : '');
-        const mapBadge = ev.isMapChange
-          ? `<span class="ev-map-tag" title="${
-              isEn ? 'Territory shift at this year' : '此节点触发版图演变'
-            }">${SVG_ICONS.mapChange}</span>`
-          : '';
-        const traceBtn = `<button type="button" class="ev-journey-btn person-place-btn" data-idx="${idx}">${
-          isEn ? 'Place ›' : '沿革 ›'
-        }</button>`;
-
-        const quoteTxt = isEn ? ev.quoteEn || '' : ev.quoteZh || '';
-        const quoteHtml = quoteTxt ? `<span class="person-ev-quote">${quoteTxt}</span>` : '';
-
-        let leftBadgeHtml;
-        if (isMulti) {
-          const tagItems = isShared && Array.isArray(ev.participants)
-            ? ev.participants
-            : [{ personEn: ev.personEn, personZh: ev.personZh, color: ev.personColor }];
-          const tagsHtml = tagItems
-            .map(
-              (pt) =>
-                `<span class="person-track-tag" style="--track-color:${pt.color}">` +
-                `<span class="pt-name">${escHtml(isEn ? pt.personEn : pt.personZh)}</span>` +
-                `</span>`
-            )
-            .join('');
-          leftBadgeHtml =
-            `<span class="person-track-tags-group">${tagsHtml}</span>` +
-            `<span class="person-yr-sub">${yrStr} · ${this.dynastyName(ev.dynasty)}</span>`;
-        } else {
-          leftBadgeHtml =
-            `<span class="person-idx-line"><span class="cr-stop-num">${idx + 1}</span><span>${yrStr}</span></span>` +
-            `<span class="t-sub">${this.dynastyName(ev.dynasty)}</span>`;
-        }
-
-        const copyHtml =
-          isShared && Array.isArray(ev.distinctNotes) && ev.distinctNotes.length > 1
-            ? ev.distinctNotes
-                .map(
-                  (pt) =>
-                    `<span class="t-sub person-ev-copy person-ev-subnote">` +
-                    `<i class="person-ev-dot" style="background:${pt.color}"></i>` +
-                    `${isEn ? pt.textEn : pt.textZh}` +
-                    `</span>`
-                )
-                .join('')
-            : `<span class="t-sub person-ev-copy">${isEn ? ev.textEn : ev.textZh}</span>`;
-
-        li.innerHTML =
-          `<span class="t-era person-era-col">${leftBadgeHtml}</span>` +
-          `<span class="t-val">` +
-          `<span class="person-site-line"><span>${siteLabel}${mapBadge}</span>${traceBtn}</span>` +
-          `${copyHtml}` +
-          `${quoteHtml}` +
-          `</span>`;
-
-        li.addEventListener('pointerenter', (e) => {
-          if (e.pointerType !== 'touch') this._setHoveredPersonPin(idx);
-        });
-        li.addEventListener('pointerleave', (e) => {
-          if (e.pointerType !== 'touch') this._setHoveredPersonPin(-1);
-        });
-        li.addEventListener('click', () => {
-          this.selectPersonEvent(idx, true);
-        });
-        const traceBtnEl = li.querySelector('.person-place-btn');
-        if (traceBtnEl) {
-          traceBtnEl.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const savedReturn = {
-              profile: isMulti ? profiles.map((p) => p.key).join(',') : profile,
-              labelZh: isMulti ? profiles.map((p) => p.zh).join('×') : profile.zh,
-              labelEn: isMulti ? profiles.map((p) => p.en).join(' × ') : profile.en,
-              eventIdx: idx,
-            };
-            this.jumpToYear(this._clampYearToDynasty(ev.dynasty, ev.year));
-            this.openGenealogyAt(ev.coord[0], ev.coord[1], ev.siteZh, {
-              returnPerson: savedReturn,
-            });
-          });
-        }
-        listEl.appendChild(li);
-      });
-
-      if (scrollEl) {
-        if (activeLi && typeof activeLi.scrollIntoView === 'function') {
-          activeLi.scrollIntoView({ block: 'nearest' });
-        } else if (preserveScroll) {
-          scrollEl.scrollTop = prevScroll;
-        } else if (firstSharedLi && typeof firstSharedLi.scrollIntoView === 'function') {
-          firstSharedLi.scrollIntoView({ block: 'center' });
-        } else {
-          scrollEl.scrollTop = 0;
-        }
-      }
-      if (this.locale === 'zh-tw') this._applyZhHantDom(this._id('genealogy-card'));
-    }
-
-    // Stop navigation lives at the bottom of the card, where the reader finishes
-    // the current entry; naming the next stop gives a reason to keep going.
-    _renderPersonFooter(events, curIdx, isEn) {
-      const footEl = this._id('genealogy-foot');
-      if (!footEl) return;
-      const isMulti = Boolean(this.activePerson && this.activePerson.isMulti);
-      const nextIdx = curIdx < 0 ? 0 : curIdx + 1 < events.length ? curIdx + 1 : -1;
-      const next = nextIdx >= 0 ? events[nextIdx] : null;
-      let nextLabel;
-      if (next) {
-        const site = escHtml(isEn ? next.siteEn || this.trTerm(next.siteZh) : next.siteZh);
-        const whoPrefix = isMulti
-          ? next.isSharedEncounter && Array.isArray(next.participants)
-            ? `${next.participants.map((p) => escHtml(isEn ? p.personEn : p.personZh)).join('×')} · `
-            : `${escHtml(isEn ? next.personEn : next.personZh)} · `
-          : '';
-        const yr = isEn
-          ? ` · ${this.formatYear(next.year)}`
-          : ` · ${next.year <= 0 ? '前' + -next.year : next.year}年`;
-        const lead = curIdx < 0 ? (isEn ? 'Start' : '出发') : isEn ? 'Next' : '下一站';
-        nextLabel = `${lead} · ${whoPrefix}${site}${yr}`;
-      } else {
-        nextLabel = isEn ? 'Back to overview' : '回到全图总览';
-      }
-      const prevTitle = isEn ? 'Prev' : '上一站';
-      footEl.innerHTML =
-        `<button type="button" class="gen-foot-prev" id="act-person-prev" title="${prevTitle}"${
-          curIdx < 0 ? ' disabled' : ''
-        }>${SVG_ICONS.arrowLeft}<span>${prevTitle}</span></button>` +
-        `<button type="button" class="gen-foot-next" id="act-person-next"><span>${nextLabel}</span>${SVG_ICONS.arrowRight}</button>`;
-      footEl.classList.remove('is-hidden');
-      const prevBtn = footEl.querySelector('#act-person-prev');
-      if (prevBtn) {
-        prevBtn.addEventListener('click', () => {
-          const prevIdx = curIdx > 0 ? curIdx - 1 : -1;
-          this.selectPersonEvent(prevIdx, true);
-        });
-      }
-      const nextBtn = footEl.querySelector('#act-person-next');
-      if (nextBtn) {
-        nextBtn.addEventListener('click', () => this.selectPersonEvent(next ? nextIdx : -1, true));
-      }
-    }
-
-    _hidePersonFooter() {
-      const footEl = this._id('genealogy-foot');
-      if (!footEl) return;
-      footEl.classList.add('is-hidden');
-      footEl.innerHTML = '';
-    }
-
-    _syncTracedPrefecture() {
-      if (!this.grpPrefectures || typeof this.grpPrefectures.querySelectorAll !== 'function') {
-        return;
-      }
-      this.grpPrefectures
-        .querySelectorAll('.prefecture-shape.is-traced')
-        .forEach((el) => el.classList.remove('is-traced'));
-      const cardEl = this._id('genealogy-card');
-      if (!this.activeTrace || (cardEl && cardEl.classList.contains('is-hidden'))) {
-        return;
-      }
-      const [lng, lat] = this.activeTrace;
-      const snap = this.lastRenderedSnap;
-      if (!snap || !Array.isArray(snap.prefectures)) return;
-      let matchedPrefTitle = '';
-      for (const pref of snap.prefectures) {
-        if (pref && pref.title && MercatorProjector.pointInShape(lng, lat, pref.shape)) {
-          matchedPrefTitle = pref.title;
-          break;
-        }
-      }
-      if (!matchedPrefTitle) return;
-      this.grpPrefectures.querySelectorAll('.prefecture-shape').forEach((el) => {
-        if (el.dataset && el.dataset.prefTitle === matchedPrefTitle) {
-          el.classList.add('is-traced');
-          if (el.parentNode && typeof el.parentNode.insertBefore === 'function') {
-            const regCasing = el.parentNode.querySelector('.region-shape-casing, .region-caption');
-            if (regCasing) {
-              el.parentNode.insertBefore(el, regCasing);
-            } else if (typeof el.parentNode.appendChild === 'function') {
-              el.parentNode.appendChild(el);
-            }
-          }
-        }
-      });
-    }
-
-    static get PLACE_LANDMARK_EVENTS() {
-      return (window.ATLAS_LORE_DATA && window.ATLAS_LORE_DATA.PLACE_LANDMARK_EVENTS) || [];
-    }
-
-    static get STRATEGIC_PASSES() {
-      return (window.ATLAS_LORE_DATA && window.ATLAS_LORE_DATA.STRATEGIC_PASSES) || [];
-    }
-
-    static get PLACE_GAZETTEER() {
-      return (window.ATLAS_LORE_DATA && window.ATLAS_LORE_DATA.PLACE_GAZETTEER) || [];
-    }
-
-    static get CITY_LORE() {
-      return (window.ATLAS_LORE_DATA && window.ATLAS_LORE_DATA.CITY_LORE) || [];
-    }
-
-    _resolvePlaceLoreBanner(lng, lat, matchedPass, identityModern, rowsData) {
-      if (matchedPass) {
-        return {
-          badge: this.locale === 'en' ? 'Strategic Pass' : '雄关形胜',
-          tag: this.locale === 'en' ? matchedPass.rangeEn : matchedPass.rangeZh,
-          desc: this.locale === 'en' ? matchedPass.chokepointEn : matchedPass.chokepointZh,
-          tagEn: matchedPass.rangeEn,
-          descEn: matchedPass.chokepointEn,
-        };
-      }
-      let bestCity = null;
-      let bestKm = 28;
-      for (const c of HistoricalAtlasController.CITY_LORE) {
-        if (!Array.isArray(c.coord)) continue;
-        const km = this.projector.greatCircleKm([lng, lat], c.coord);
-        const modMatch =
-          identityModern &&
-          c.modern &&
-          (c.modern === identityModern ||
-            identityModern.startsWith(c.modern) ||
-            c.modern.startsWith(identityModern)) &&
-          km <= 42;
-        if (km <= bestKm || (modMatch && km < bestKm + 15)) {
-          bestKm = Math.min(bestKm, km);
-          bestCity = c;
-        }
-      }
-      if (bestCity) {
-        return {
-          badge: this.locale === 'en' ? 'Historic City' : '名城形胜',
-          tag: this.locale === 'en' ? bestCity.tagEn : bestCity.tagZh,
-          desc: this.locale === 'en' ? bestCity.descEn : bestCity.descZh,
-          tagEn: bestCity.tagEn,
-          descEn: bestCity.descEn,
-        };
-      }
-
-      const preModRows = rowsData
-        ? rowsData.filter(
-            (r) => r.d && r.d.key !== 'roc' && r.d.key !== 'prc' && r.near && r.near.km < 25
-          )
-        : (this.dynasties || [])
-            .filter((dyn) => dyn.key !== 'roc' && dyn.key !== 'prc')
-            .map((dyn) => ({
-              d: dyn,
-              near: this._findNearestSettlement(dyn.settlements, lng, lat, 25),
-            }))
-            .filter((r) => r.near && r.near.km < 25);
-      const gazHit =
-        HistoricalAtlasController.PLACE_GAZETTEER.find(
-          (g) => Array.isArray(g.coord) && this.projector.greatCircleKm([lng, lat], g.coord) <= 22
-        ) || null;
-
-      const isEn = this.locale === 'en';
-      const modCompareEn = identityModern
-        ? String(this._enModernCity(identityModern) || '').trim()
-        : '';
-      const ancNamesZh = [];
-      const ancNamesEn = [];
-      const addAncName = (raw) => {
-        if (!raw) return;
-        const rawTrim = String(raw).trim();
-        const cleanZh = rawTrim.replace(/（.*?）|\(.*?\)/g, '').trim();
-        if (cleanZh && cleanZh !== identityModern && !ancNamesZh.includes(cleanZh)) {
-          ancNamesZh.push(cleanZh);
-        }
-        const enRaw = this._enDict(rawTrim);
-        const cleanEn = String(enRaw || '').replace(/（.*?）|\(.*?\)/g, '').trim();
-        if (
-          cleanEn &&
-          !/[\u4e00-\u9fa5]/.test(cleanEn) &&
-          cleanEn !== identityModern &&
-          cleanEn !== modCompareEn &&
-          !ancNamesEn.includes(cleanEn)
-        ) {
-          ancNamesEn.push(cleanEn);
-        }
-      };
-      for (const r of preModRows) {
-        addAncName(r.near.s.ancient);
-      }
-      if (gazHit) {
-        addAncName(gazHit.name);
-        for (const al of gazHit.aliases || []) {
-          if (ancNamesZh.length >= 4 && ancNamesEn.length >= 4) break;
-          addAncName(al);
-        }
-      }
-
-      const roleGroupsZh = [];
-      const roleGroupsEn = [];
-      for (const r of preModRows) {
-        if (!r.near.s.remark) continue;
-        const remZh = r.near.s.remark;
-        const dynZh = r.d.title;
-        const exZh = roleGroupsZh.find((g) => g.rem === remZh);
-        if (exZh) {
-          if (!exZh.dyns.includes(dynZh) && exZh.dyns.length < 2) {
-            exZh.dyns.push(dynZh);
-          }
-        } else if (roleGroupsZh.length < 4) {
-          roleGroupsZh.push({ dyns: [dynZh], rem: remZh });
-        }
-
-        const remEn = this._enDict(remZh);
-        const enDynObj =
-          (this.enLocale && this.enLocale.dynasties && this.enLocale.dynasties[r.d.key]) || {};
-        const dynEn = enDynObj.name || r.d.title;
-        if (remEn && !/[\u4e00-\u9fa5]/.test(remEn)) {
-          const exEn = roleGroupsEn.find((g) => g.rem === remEn);
-          if (exEn) {
-            if (!exEn.dyns.includes(dynEn) && exEn.dyns.length < 2) {
-              exEn.dyns.push(dynEn);
-            }
-          } else if (roleGroupsEn.length < 4) {
-            roleGroupsEn.push({ dyns: [dynEn], rem: remEn });
-          }
-        }
-      }
-
-      if (!roleGroupsZh.length) {
-        const keyEraSet = new Set(['qin', 'xihan', 'tang', 'beisong', 'yuan', 'ming', 'qing']);
-        const eraRows = rowsData
-          ? rowsData.filter((r) => r.d && keyEraSet.has(r.d.key))
-          : (this.dynasties || [])
-              .filter((dyn) => keyEraSet.has(dyn.key))
-              .map((dyn) => {
-                const sk = this._resolveSnapKey(dyn, dyn.focusYear);
-                const sn = (this.snapshots && this.snapshots[sk]) || {
-                  polities: [],
-                  regions: [],
-                  prefectures: [],
-                };
-                const eh = this._resolveEraPlaceAt(lng, lat, dyn, sn);
-                return {
-                  d: dyn,
-                  polityHit: eh.polity,
-                  regionObjs: eh.regionObjs,
-                  prefObjs: eh.prefObjs,
-                };
-              });
-        for (const r of eraRows) {
-          const regs = r.regionObjs || [];
-          const prefs = r.prefObjs || [];
-          for (const p of prefs) addAncName(p.title);
-          const items = [...regs, ...prefs];
-          if (!items.length && !r.polityHit) continue;
-          const remZh = items.length ? `属${items.map((x) => x.title).join('·')}` : `属${r.polityHit}`;
-          const dynZh = r.d.title;
-          const exZh = roleGroupsZh.find((g) => g.rem === remZh);
-          if (exZh) {
-            if (!exZh.dyns.includes(dynZh) && exZh.dyns.length < 2) exZh.dyns.push(dynZh);
-          } else if (roleGroupsZh.length < 4) {
-            roleGroupsZh.push({ dyns: [dynZh], rem: remZh });
-          }
-
-          const enParts = items
-            .map((x) => this._enDict(x.title))
-            .filter((s) => s && !/[\u4e00-\u9fa5]/.test(s));
-          const polEn = r.polityHit ? this._enDict(r.polityHit) : '';
-          const remEn = enParts.length
-            ? `Administered under ${enParts.join(' · ')}`
-            : polEn && !/[\u4e00-\u9fa5]/.test(polEn)
-              ? `Within ${polEn}`
-              : '';
-          const enDynObj =
-            (this.enLocale && this.enLocale.dynasties && this.enLocale.dynasties[r.d.key]) || {};
-          const dynEn = enDynObj.name || r.d.title;
-          if (remEn) {
-            const exEn = roleGroupsEn.find((g) => g.rem === remEn);
-            if (exEn) {
-              if (!exEn.dyns.includes(dynEn) && exEn.dyns.length < 2) exEn.dyns.push(dynEn);
-            } else if (roleGroupsEn.length < 4) {
-              roleGroupsEn.push({ dyns: [dynEn], rem: remEn });
-            }
-          }
-        }
-        if (!roleGroupsZh.length && identityModern) {
-          roleGroupsZh.push({ dyns: ['现代'], rem: `${identityModern}及南海诸岛海域重镇` });
-          roleGroupsEn.push({
-            dyns: ['Modern'],
-            rem: `Strategic municipality of ${modCompareEn || 'China'}`,
-          });
-        }
-      }
-
-      if (!roleGroupsZh.length) return null;
-      const tagZh = ancNamesZh.length
-        ? `古称${ancNamesZh.slice(0, 4).join('、')}`
-        : '历代建置要览';
-      const descZh = `${roleGroupsZh.map((g) => `${g.dyns.join('·')}：${g.rem}`).join('；')}。`;
-      const tagEn = ancNamesEn.length
-        ? `Historic ${ancNamesEn.slice(0, 3).join(' / ')}`
-        : 'Historical Evolution';
-      const descEn = roleGroupsEn.length
-        ? `${roleGroupsEn.map((g) => `${g.dyns.join('/')}: ${g.rem}`).join('; ')}.`
-        : descZh;
-
-      return {
-        badge: isEn ? 'City Profile' : '城池形胜',
-        tag: isEn ? (roleGroupsEn.length ? tagEn : tagZh) : tagZh,
-        desc: isEn ? descEn : descZh,
-        tagEn: roleGroupsEn.length ? tagEn : tagZh,
-        descEn,
-      };
-    }
-
-    _findNearbyPass(lng, lat, maxKm = 32) {
-      let best = null;
-      let bestKm = maxKm;
-      for (const p of HistoricalAtlasController.STRATEGIC_PASSES) {
-        const km = this.projector.greatCircleKm([lng, lat], p.coord);
-        if (km <= bestKm) {
-          bestKm = km;
-          best = { pass: p, km };
-        }
-      }
-      return best;
-    }
-
-    _collectPlaceEventsForDynasty(d, lng, lat, near) {
-      const results = [];
-      const nearCity = near && near.km <= 42 ? near.s : null;
-      const isCloseCoord = (c, maxKm = 58) => {
-        if (!c) return false;
-        if (this.projector.greatCircleKm([lng, lat], c) <= maxKm) return true;
-        if (nearCity && this.projector.greatCircleKm(nearCity.coord, c) <= maxKm * 0.88) return true;
-        return false;
-      };
-      const matchesSiteName = (siteStr) => {
-        if (!nearCity || !siteStr) return false;
-        const cleanAnc = nearCity.ancient.replace(/（.*?）|\(.*?\)/g, '').trim();
-        if (cleanAnc.length >= 2 && siteStr.includes(cleanAnc)) return true;
-        if (Array.isArray(nearCity.aliases)) {
-          for (const al of nearCity.aliases) {
-            const cleanAl = String(al || '').replace(/（.*?）|\(.*?\)/g, '').trim();
-            if (cleanAl.length >= 2 && siteStr.includes(cleanAl)) return true;
-          }
-        }
-        if (nearCity.modern) {
-          const parts = nearCity.modern.split(/[·/、]/).map((s) => s.trim()).filter((s) => s.length >= 2);
-          if (parts.some((p) => siteStr.includes(p))) return true;
-        }
-        return false;
-      };
-
-      // 1. Dynasty milestones
-      for (const m of d.milestones || []) {
-        const mCoords = this._milestoneCoords(m);
-        const veryClose = mCoords.some((mc) => isCloseCoord(mc, 28));
-        const siteMatch = matchesSiteName(m.site);
-        if (siteMatch || veryClose || (!nearCity && mCoords.some((mc) => isCloseCoord(mc, 48)))) {
-          results.push({
-            year: m.year,
-            text: this.milestoneHeadline(d, m),
-            milestone: m,
-          });
-        }
-      }
-
-      // 2. Historical journeys
-      for (const j of HistoricalAtlasController.HISTORICAL_JOURNEYS) {
-        j.stops.forEach((st) => {
-          const inDynSpan = st.year >= d.fromYear && st.year <= d.toYear;
-          if (!inDynSpan && j.dynastyKey !== d.key) return;
-          if ((j.key === 'zhugeliang' || j.key === 'qinshihuang') && !inDynSpan) return;
-          if (isCloseCoord(st.coord, 45) && !results.some((r) => r.year === st.year)) {
-            results.push({
-              year: st.year,
-              text:
-                this.locale === 'en'
-                  ? `${st.ancientEn} — ${st.titleEn}`
-                  : `${st.ancientZh} · ${st.titleZh}`,
-              milestone: {
-                year: st.year,
-                headline: `${st.ancientZh} · ${st.titleZh}：${st.descZh.split(/[；。]/)[0]}`,
-                headlineEn: `${st.ancientEn} — ${st.titleEn}: ${st.descEn.split('.')[0]}.`,
-                site: `${st.ancientZh}（今${st.modernZh}）`,
-                siteEn: `${st.ancientEn} (${st.modernEn})`,
-                coord: st.coord,
-              },
-            });
-          }
-        });
-      }
-
-      // 3. Curated landmark events
-      const sharesCjkBigram = (a, b) => {
-        const s1 = String(a || '');
-        const s2 = String(b || '');
-        for (let i = 0; i < s1.length - 1; i++) {
-          const bg = s1.slice(i, i + 2);
-          if (/^[\u4e00-\u9fa5]{2}$/.test(bg) && s2.includes(bg)) return true;
-        }
-        return false;
-      };
-      for (const lm of HistoricalAtlasController.PLACE_LANDMARK_EVENTS) {
-        const dynMatch = lm.dynastyKey
-          ? (lm.dynastyKey === d.key || (lm.dynastyKey === 'nanbeichao' && d.key === 'nanbei'))
-          : (lm.year >= d.fromYear && lm.year <= d.toYear);
-        if (!dynMatch) continue;
-        if (isCloseCoord(lm.coord, 45)) {
-          const dup = results.some((r) =>
-            r.fromLandmark
-              ? r.year === lm.year && sharesCjkBigram(r.milestone && r.milestone.headline, lm.zh)
-              : Math.abs(r.year - lm.year) <= 3
-          );
-          if (!dup) {
-            results.push({
-              year: lm.year,
-              text: this.locale === 'en' ? lm.en : lm.zh,
-              milestone: {
-                year: lm.year,
-                headline: lm.zh,
-                headlineEn: lm.en,
-                site: lm.site,
-                siteEn: lm.siteEn,
-                coord: lm.coord,
-              },
-              fromLandmark: true,
-            });
-          }
-        }
-      }
-
-      results.sort((a, b) => a.year - b.year);
-      return results;
-    }
-
-    _findNearestTouchNode(clientX, clientY, maxPx = 22) {
-      const rect = this._cameraViewportRect || this.svg.getBoundingClientRect();
-      if (!rect.width || !rect.height) return { settlementEl: null, milestoneEl: null };
-      this._cameraViewportRect = rect;
-      const [sx, sy] = this._clientToSvgPoint(clientX, clientY);
-      const scale = Math.min(rect.width / this.camera.w, rect.height / this.camera.h);
-      let bestSettle = null;
-      let bestSettlePx = maxPx;
-      if (this.grpSettlements && !this.grpSettlements.classList.contains('is-hidden')) {
-        const showTier2 = this.svg.classList.contains('is-zoomed-cities');
-        this.grpSettlements.querySelectorAll('.settlement-node').forEach((node) => {
-          if (
-            !showTier2 &&
-            node.classList.contains('is-tier2') &&
-            !node.classList.contains('is-trace-city')
-          ) {
-            return;
-          }
-          const dPx = Math.hypot(Number(node.dataset.x) - sx, Number(node.dataset.y) - sy) * scale;
-          if (dPx <= bestSettlePx) {
-            bestSettlePx = dPx;
-            bestSettle = node;
-          }
-        });
-      }
-      let bestMile = null;
-      let bestMilePx = maxPx;
-      if (this.grpMilestones && !this.grpMilestones.classList.contains('is-hidden')) {
-        this.grpMilestones.querySelectorAll('.milestone-pin').forEach((pin) => {
-          if (
-            pin.classList.contains('is-future') ||
-            (pin.classList.contains('is-past-occluded') && !pin.classList.contains('is-active')) ||
-            (pin.classList.contains('is-secondary-pin') &&
-              !pin.classList.contains('is-current') &&
-              !pin.classList.contains('is-active'))
-          ) {
-            return;
-          }
-          const dPx = Math.hypot(Number(pin.dataset.x) - sx, Number(pin.dataset.y) - sy) * scale;
-          if (dPx <= bestMilePx) {
-            bestMilePx = dPx;
-            bestMile = pin;
-          }
-        });
-      }
-      return { settlementEl: bestSettle, milestoneEl: bestMile };
-    }
-
-    _stripModernProvincePrefix(raw, modernTitle) {
-      if (!raw) return '';
-      const provStem = modernTitle
-        ? String(modernTitle).replace(/(省|市|自治区|特别行政区|壮族|回族|维吾尔|藏族)+$/g, '')
-        : '';
-      const provPrefix = [provStem, provStem.slice(0, 2)].find(
-        (p) => p && p.length >= 2 && raw.startsWith(p) && raw.length > p.length + 1
-      );
-      return (provPrefix ? raw.slice(provPrefix.length) : raw).replace(/^[·/、\s]+/, '');
-    }
-
-    _resolveModernLocationAt(lng, lat) {
-      for (const prov of this.provinces || []) {
-        if (String(prov.code).includes('_JD')) continue;
-        if (prov.rings.some((poly) => MercatorProjector.pointInPolygonRings(lng, lat, poly))) {
-          return { modernTitle: prov.title, inModernChina: true };
-        }
-      }
-      if (lng >= 109.5 && lng <= 118.5 && lat >= 3.5 && lat <= 18.2) {
-        return { modernTitle: '海南省', inModernChina: true };
-      }
-      for (const nb of (this.snapshots && this.snapshots.neighbors) || []) {
-        if (MercatorProjector.pointInShape(lng, lat, nb.shape)) {
-          return { modernTitle: nb.title, inModernChina: false };
-        }
-      }
-      return { modernTitle: '', inModernChina: false };
-    }
-
-    _getCanonicalPlaces() {
-      if (this._canonicalPlaces) return this._canonicalPlaces;
-      const seen = new Set();
-      const list = [];
-      for (const d of this.dynasties || []) {
-        for (const s of d.settlements || []) {
-          if (!s.modern || !Array.isArray(s.coord)) continue;
-          const key = `${s.modern}:${Math.round(s.coord[0] * 100)},${Math.round(s.coord[1] * 100)}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          list.push({
-            ancient: s.ancient,
-            aliases: s.aliases || [],
-            modern: s.modern,
-            coord: s.coord,
-            isCapital: false,
-          });
-        }
-      }
-      for (const g of HistoricalAtlasController.PLACE_GAZETTEER) {
-        if (!g.modern || !Array.isArray(g.coord)) continue;
-        if (list.some((p) => this.projector.greatCircleKm(p.coord, g.coord) <= 15)) continue;
-        list.push({
-          ancient: g.name,
-          aliases: g.aliases || [],
-          modern: g.modern,
-          coord: g.coord,
-          isCapital: false,
-        });
-      }
-      this._canonicalPlaces = list;
-      return list;
-    }
-
-    _findNearestSettlement(items, lng, lat, maxKm = 170) {
-      let best = null;
-      let bestKm = maxKm;
-      for (const s of items || []) {
-        const km = this.projector.greatCircleKm([lng, lat], s.coord);
-        if (km < bestKm) {
-          bestKm = km;
-          best = { s, km };
-        }
-      }
-      return best;
-    }
-
-    /** Polity containing the point, preferring Chinese regimes over peripheral neighbors. */
-    _polityAt(lng, lat, snap) {
-      const polities = (snap && snap.polities) || [];
-      return (
-        polities.find((p) => p.role !== 'neighbor' && MercatorProjector.pointInShape(lng, lat, p.shape)) ||
-        polities.find((p) => p.role === 'neighbor' && MercatorProjector.pointInShape(lng, lat, p.shape)) ||
-        null
-      );
-    }
-
-    _shapeAnchorOrCentroid(item) {
-      if (item && Array.isArray(item.anchor) && item.anchor.length === 2) return item.anchor;
-      const shape = item && item.shape;
-      if (!shape || !shape.coordinates) return [0, 0];
-      const ring = shape.type === 'Polygon' ? shape.coordinates[0] : (shape.coordinates[0] && shape.coordinates[0][0]);
-      if (!ring || !ring.length) return [0, 0];
-      let sx = 0, sy = 0;
-      for (const pt of ring) {
-        sx += pt[0];
-        sy += pt[1];
-      }
-      return [sx / ring.length, sy / ring.length];
-    }
-
-    _minVertexDistSq(lng, lat, shape) {
-      if (!shape || !shape.coordinates) return Infinity;
-      const polys = shape.type === 'Polygon' ? [shape.coordinates] : shape.coordinates;
-      let best = Infinity;
-      for (const poly of polys) {
-        const ring = poly && poly[0];
-        if (!ring) continue;
-        for (const pt of ring) {
-          const d2 = (pt[0] - lng) * (pt[0] - lng) + (pt[1] - lat) * (pt[1] - lat);
-          if (d2 < best) best = d2;
-        }
-      }
-      return best;
-    }
-
-    _resolveEraPlaceAt(lng, lat, d, snap, modernLoc, closestOverall) {
-      const loc = modernLoc || this._resolveModernLocationAt(lng, lat);
-      const closest =
-        closestOverall !== undefined
-          ? closestOverall
-          : this._findNearestSettlement(this._getCanonicalPlaces(), lng, lat, 160);
-      let polity = null;
-      const regionObjs = [];
-      const prefObjs = [];
-      if (d && d.key === 'prc') {
-        polity = loc.inModernChina ? '中华人民共和国' : loc.modernTitle || null;
-      } else if (snap) {
-        const hit = this._polityAt(lng, lat, snap);
-        polity = hit ? hit.title : null;
-        for (const reg of snap.regions || []) {
-          if (
-            MercatorProjector.pointInShape(lng, lat, reg.shape) &&
-            !regionObjs.some((r) => r.title === reg.title)
-          ) {
-            regionObjs.push(reg);
-          }
-        }
-        if (!d || d.key !== 'roc') {
-          for (const pref of snap.prefectures || []) {
-            if (
-              MercatorProjector.pointInShape(lng, lat, pref.shape) &&
-              !prefObjs.some((p) => p.title === pref.title)
-            ) {
-              prefObjs.push(pref);
-            }
-          }
-        }
-      }
-      let near = this._findNearestSettlement(d && d.settlements, lng, lat, 175);
-      if (
-        d &&
-        (d.key === 'roc' || d.key === 'prc') &&
-        closest &&
-        closest.s &&
-        closest.s.modern &&
-        (!near || (near.km > 25 && closest.km + 5 < near.km))
-      ) {
-        const rawMod = String(closest.s.modern).replace(/（.*?）|\(.*?\)/g, '').trim();
-        const cleanMod = this._stripModernProvincePrefix(rawMod, loc.modernTitle) || rawMod;
-        near = {
-          s: {
-            ancient: cleanMod,
-            rawModern: closest.s.modern,
-            modern: closest.s.modern,
-            coord: closest.s.coord,
-            isCapital: false,
-          },
-          km: closest.km,
-        };
-      } else if (
-        d &&
-        d.key !== 'roc' &&
-        d.key !== 'prc' &&
-        prefObjs.length > 0 &&
-        closest &&
-        closest.km < 25 &&
-        near &&
-        near.km >= 25
-      ) {
-        near = null;
-      }
-
-      // Prevent cross-Yangtze false-positive settlement matches between Zhenjiang/Nanjing (south) and Yangzhou/Pukou (north)
-      if (
-        near &&
-        near.km <= 25 &&
-        near.s &&
-        Array.isArray(near.s.coord) &&
-        lng >= 118.5 &&
-        lng <= 120.2 &&
-        ((lat <= 32.24 && near.s.coord[1] >= 32.28) || (lat >= 32.28 && near.s.coord[1] <= 32.24))
-      ) {
-        near = null;
-      }
-
-      // Prevent north-of-Yangtze Guangling/Jiangdu prefectures from bleeding south into Zhenjiang (lat <= 32.24)
-      if (
-        lat <= 32.24 &&
-        lng >= 118.8 &&
-        lng <= 120.2 &&
-        prefObjs.some((p) => p.title === '广陵郡' || p.title === '广陵国' || p.title === '江都郡')
-      ) {
-        const filtered = prefObjs.filter(
-          (p) => p.title !== '广陵郡' && p.title !== '广陵国' && p.title !== '江都郡'
-        );
-        prefObjs.length = 0;
-        if (filtered.length > 0) {
-          prefObjs.push(...filtered);
-        } else if (snap && Array.isArray(snap.prefectures)) {
-          const southPref =
-            snap.prefectures.find((p) => p.title === '吴郡' || p.title === '毗陵郡') ||
-            snap.prefectures.find((p) => p.title === '丹阳郡' || p.title === '会稽郡');
-          if (southPref) prefObjs.push(southPref);
-        }
-      }
-
-      // Disambiguate overlapping secondary prefectures at border buffers
-      if (prefObjs.length > 1) {
-        const titles = prefObjs.map((p) => p.title);
-        let picked = null;
-        if (titles.includes('丹阳郡') && titles.includes('九江郡')) {
-          picked = prefObjs.find((p) => p.title === (lat < 31.85 ? '丹阳郡' : '九江郡'));
-        } else if (titles.includes('豫章郡') && titles.includes('九江郡')) {
-          picked = prefObjs.find((p) => p.title === (lat < 30.0 ? '豫章郡' : '九江郡'));
-        } else if (titles.includes('太平府') && titles.includes('和州')) {
-          picked = prefObjs.find((p) => p.title === (lng > 118.35 || lat < 31.45 ? '太平府' : '和州'));
-        } else if (titles.includes('解州') && titles.includes('陕州')) {
-          picked = prefObjs.find((p) => p.title === (lat < 34.85 ? '陕州' : '解州'));
-        } else if (titles.includes('南郡') && (titles.includes('巴陵郡') || titles.includes('长沙郡'))) {
-          picked =
-            lat < 29.55
-              ? prefObjs.find((p) => p.title === '巴陵郡' || p.title === '长沙郡')
-              : prefObjs.find((p) => p.title === '南郡');
-        }
-        if (!picked && near && near.km <= 25 && near.s) {
-          const anc = String(near.s.ancient || '');
-          const rem = String(near.s.remark || '');
-          picked = prefObjs.find((p) => {
-            const stem = String(p.title || '').replace(/(?:郡|府|州|国|军|路|厅|安抚司|行都司)$/, '');
-            return stem.length >= 1 && (anc.includes(stem) || rem.includes(p.title));
-          });
-        }
-        if (!picked) {
-          picked = prefObjs.slice().sort((a, b) => {
-            const ca = this._shapeAnchorOrCentroid(a);
-            const cb = this._shapeAnchorOrCentroid(b);
-            return (
-              Math.hypot(ca[0] - lng, ca[1] - lat) - Math.hypot(cb[0] - lng, cb[1] - lat)
-            );
-          })[0];
-        }
-        if (picked) {
-          prefObjs.length = 0;
-          prefObjs.push(picked);
-        }
-      }
-
-      // Enforce Region <-> Prefecture & Yangtze/Yellow River consistency and fill coastal/frontier gaps
-      if (snap && Array.isArray(snap.regions) && snap.regions.length > 0 && (!d || d.key !== 'prc')) {
-        const setReg = (...names) => {
-          for (const n of names) {
-            const found = snap.regions.find((r) => r.title === n);
-            if (found) {
-              regionObjs.length = 0;
-              regionObjs.push(found);
-              return true;
-            }
-          }
-          return false;
-        };
-        const prefTitle = prefObjs[0] ? prefObjs[0].title : '';
-        const nearAnc = near && near.km <= 25 && near.s ? near.s.ancient : '';
-        const dynKey = d ? d.key : '';
-
-        if (dynKey === 'sui') {
-          if (
-            [
-              '蒋州', '润州', '丹阳郡', '毗陵郡', '吴郡', '吴州', '苏州', '余杭郡', '杭州',
-              '会稽郡', '越州', '宣城郡', '宣州', '新安郡', '歙州', '东阳郡', '婺州',
-              '遂安郡', '睦州', '永嘉郡', '温州', '临海郡', '台州', '豫章郡', '洪州',
-              '九江郡', '江州', '鄱阳郡', '饶州', '临川郡', '抚州', '庐陵郡', '吉州',
-            ].includes(prefTitle) ||
-            (loc.modernTitle === '江苏省' && lat <= 32.24 && lng >= 118.6)
-          ) {
-            setReg('江表诸郡');
-          } else if (
-            [
-              '江都郡', '扬州', '钟离郡', '濠州', '淮南郡', '寿州', '庐江郡', '庐州',
-              '同安郡', '舒州', '历阳郡', '和州', '下邳郡', '东海郡', '海州', '山阳郡',
-              '楚州', '弋阳郡', '光州', '蕲春郡', '蕲州',
-            ].includes(prefTitle)
-          ) {
-            setReg('淮海诸郡');
-          }
-        } else if (dynKey === 'tang') {
-          if (
-            [
-              '润州', '常州', '苏州', '宣州', '杭州', '越州', '湖州', '睦州',
-              '婺州', '衢州', '处州', '温州', '台州', '明州', '池州', '歙州',
-            ].includes(prefTitle) ||
-            (loc.modernTitle === '江苏省' && lat <= 32.24 && lng >= 118.6)
-          ) {
-            setReg('江南东道', '江南道');
-          } else if (
-            [
-              '舒州', '庐州', '和州', '濠州', '寿州', '扬州', '楚州', '滁州',
-              '光州', '蕲州', '安州', '申州',
-            ].includes(prefTitle)
-          ) {
-            setReg('淮南道');
-          } else if (['振州', '儋州', '琼州', '崖州', '万安州'].includes(prefTitle)) {
-            setReg('岭南道');
-          }
-        } else if (dynKey === 'wudai') {
-          if (
-            polity === '吴越' ||
-            [
-              '常州', '苏州', '秀州', '杭州', '湖州', '越州', '明州', '温州',
-              '台州', '婺州', '衢州', '处州', '睦州',
-            ].includes(prefTitle)
-          ) {
-            setReg('两浙');
-          } else if (
-            ['金陵府', '江宁府', '润州', '宣州', '池州', '歙州'].includes(prefTitle) ||
-            nearAnc.includes('金陵') ||
-            nearAnc === '润州' ||
-            (loc.modernTitle === '江苏省' && lat <= 32.24 && lng >= 118.6)
-          ) {
-            setReg('江东', '江南');
-          } else if (
-            ['舒州', '庐州', '和州', '濠州', '寿州', '扬州', '楚州', '滁州', '泰州', '通州'].includes(
-              prefTitle
-            )
-          ) {
-            setReg('淮南');
-          }
-        } else if (dynKey === 'beisong' || dynKey === 'nansong') {
-          if (
-            [
-              '江宁府', '建康府', '太平州', '宣州', '宁国府', '池州', '徽州',
-              '歙州', '饶州', '信州', '南康军', '广德军',
-            ].includes(prefTitle)
-          ) {
-            setReg('江南东路');
-          } else if (
-            [
-              '润州', '镇江府', '常州', '苏州', '平江府', '秀州', '嘉兴府',
-              '湖州', '安吉州', '杭州', '临安府', '越州', '绍兴府', '明州',
-              '庆元府', '温州', '瑞安府', '台州', '婺州', '衢州', '处州',
-              '严州', '睦州', '建德府',
-            ].includes(prefTitle)
-          ) {
-            setReg('两浙路', '两浙西路', '两浙东路');
-          } else if (
-            [
-              '舒州', '安庆府', '庐州', '和州', '无为军', '濠州', '寿州',
-              '扬州', '真州', '泰州', '通州', '楚州', '海州', '泗州', '宿州',
-              '亳州', '光州', '蕲州', '黄州', '安州', '高邮军',
-            ].includes(prefTitle)
-          ) {
-            setReg('淮南路', '淮南东路', '淮南西路');
-          } else if (
-            dynKey === 'beisong' &&
-            ['徐州', '单州', '济州', '兖州', '曹州', '郓州', '东平府', '应天府'].includes(
-              prefTitle
-            )
-          ) {
-            setReg('京东西路', '京东路');
-          } else if (prefTitle === '岳州' || nearAnc === '岳州') {
-            setReg('荆湖北路', '荆湖路');
-          } else if (dynKey === 'beisong' && (prefTitle === '陕州' || nearAnc === '陕州')) {
-            setReg('永兴军路', '陕西路');
-          }
-        }
-
-        if (
-          regionObjs.length === 0 &&
-          polity &&
-          snap.polities &&
-          ((snap.polities[0] && polity === snap.polities[0].title) ||
-            ['魏', '蜀', '吴', '南唐', '吴越', '前蜀', '后蜀', '南汉', '楚', '闽', '荆南', '北汉'].includes(
-              polity
-            ))
-        ) {
-          let bestReg = null;
-          let bestD2 = Infinity;
-          for (const reg of snap.regions) {
-            const d2 = this._minVertexDistSq(lng, lat, reg.shape);
-            if (d2 < bestD2) {
-              bestD2 = d2;
-              bestReg = reg;
-            }
-          }
-          if (bestReg) regionObjs.push(bestReg);
-        } else if (regionObjs.length > 1) {
-          const pickedReg = regionObjs.slice().sort((a, b) => {
-            const ca = this._shapeAnchorOrCentroid(a);
-            const cb = this._shapeAnchorOrCentroid(b);
-            return Math.hypot(ca[0] - lng, ca[1] - lat) - Math.hypot(cb[0] - lng, cb[1] - lat);
-          })[0];
-          regionObjs.length = 0;
-          regionObjs.push(pickedReg);
-        }
-      }
-
-      return { polity, regionObjs, prefObjs, near, modernLoc: loc };
-    }
-
-    /**
-     * Resolve the modern place name a genealogy heading may assert as "今 X".
-     * "今" claims identity, not proximity: only a gazetteer landmark's own `modern` field, or the
-     * nearest settlement within the same 25 km "即此地" radius used by the per-dynasty rows, qualifies.
-     * A leading province already shown as the modern title is dropped ("湖南岳阳" -> "岳阳").
-     */
-    _resolveModernIdentity(lng, lat, traceLabel, modernTitle, closestOverall) {
-      const IDENTITY_KM = 25;
-      const labelLower = String(traceLabel || '').toLowerCase();
-      const gazHit =
-        HistoricalAtlasController.PLACE_GAZETTEER.find(
-          (g) =>
-            Array.isArray(g.coord) &&
-            this.projector.greatCircleKm([lng, lat], g.coord) <= IDENTITY_KM &&
-            (this.projector.greatCircleKm([lng, lat], g.coord) <= 3 ||
-              (labelLower &&
-                [g.name, ...(g.aliases || [])].some((n) => String(n).toLowerCase() === labelLower)))
-        ) || null;
-      const isDirectSettlementHit =
-        closestOverall &&
-        closestOverall.km <= 3 &&
-        closestOverall.s &&
-        closestOverall.s.modern &&
-        (!gazHit ||
-          !labelLower ||
-          String(closestOverall.s.ancient || '').toLowerCase() === labelLower ||
-          String(closestOverall.s.modern || '').toLowerCase() === labelLower ||
-          (Array.isArray(closestOverall.s.aliases) &&
-            closestOverall.s.aliases.some((a) => String(a).toLowerCase() === labelLower)) ||
-          (String(gazHit.name || '').toLowerCase() !== labelLower &&
-            !(gazHit.aliases || []).some((a) => String(a).toLowerCase() === labelLower)));
-      const raw = isDirectSettlementHit
-        ? closestOverall.s.modern
-        : gazHit && gazHit.modern
-          ? gazHit.modern
-          : closestOverall && closestOverall.km <= IDENTITY_KM && closestOverall.s.modern
-            ? closestOverall.s.modern
-            : '';
-      return this._stripModernProvincePrefix(raw, modernTitle);
-    }
-
-    openGenealogyAt(lng, lat, customLabel = null, opts = {}) {
-      const fromYearSync = Boolean(opts && opts.fromYearSync);
-      const preserveScroll = Boolean(opts && opts.preserveScroll);
-      const isSamePlace =
-        this.activeTrace &&
-        Math.hypot(this.activeTrace[0] - lng, this.activeTrace[1] - lat) < 0.01;
-      if (customLabel !== null) {
-        this.activeTraceLabel = String(customLabel).trim();
-      } else if (!isSamePlace) {
-        this.activeTraceLabel = '';
-      }
-      if (!this._fullSnapshotsLoaded) {
-        this._ensureFullSnapshots().then(() => {
-          if (this.activeTrace && Math.hypot(this.activeTrace[0] - lng, this.activeTrace[1] - lat) < 0.01) {
-            this.openGenealogyAt(lng, lat, this.activeTraceLabel, opts);
-          }
-        });
-      }
-      if (opts && opts.returnPerson) {
-        this.activeReturnPerson = opts.returnPerson;
-      } else if (!fromYearSync && !isSamePlace) {
-        this.activeReturnPerson = null;
-      }
-      this._dismissTraceOnboarding();
-      if (!fromYearSync && this.challenge) {
-        this.stopChallenge(true);
-      }
-      this._clearActivePerson();
-      if (this.hoverTip) {
-        this.hoverTip.classList.add('is-hidden');
-        this.hoverTip.classList.remove('is-interactive');
-      }
-      if (typeof window !== 'undefined' && window.innerWidth <= 900) {
-        this.closeMilestoneBalloon();
-        if (this.mobileChronicleOpen) {
-          this.toggleMobileChronicle(false);
-        }
-      }
-      if (!isSamePlace) {
-        this.genealogyEventsOnly = false;
-      }
-      this.activeTrace = [lng, lat];
-      this._scheduleUrlSync();
-      this._syncMobileOverlayState();
-      this.grpGenealogy.innerHTML = '';
-      const [sx, sy] = this.projector.toScreen(lng, lat);
-      const onCustomRouteStop =
-        Array.isArray(this.activeCustomRoute) &&
-        this.activeCustomRoute.some((st) => Math.hypot(st.lng - lng, st.lat - lat) < 0.02);
-      if (!onCustomRouteStop) {
-        const g = this._svgNode(
-          'g',
-          { 'data-x': sx.toFixed(1), 'data-y': sy.toFixed(1) },
-          this.grpGenealogy
-        );
-        this._svgNode('circle', { class: 'trace-pin', r: 10 }, g);
-        this._svgNode('circle', { class: 'trace-dot', r: 3.5 }, g);
-        if (this.activeTraceLabel) {
-          const lbl = this._svgNode(
-            'text',
-            { class: 'trace-pin-label', x: '0', y: '22', 'text-anchor': 'middle' },
-            g
-          );
-          lbl.textContent = this.trTerm(this.activeTraceLabel);
-        }
-      }
-      this._invalidateTypographyLayout();
-      if (!fromYearSync && !onCustomRouteStop) {
-        if (
-          typeof window !== 'undefined' &&
-          window.innerWidth <= 900 &&
-          (sy > this.camera.y + this.camera.h * 0.34 || sy < this.camera.y + this.camera.h * 0.08)
-        ) {
-          this.camera.y = sy - this.camera.h * 0.2;
-          this._applyCamera(true);
-        } else if (
-          typeof window !== 'undefined' &&
-          window.innerWidth > 900 &&
-          sx > this.camera.x + this.camera.w * 0.62
-        ) {
-          this.camera.x = sx - this.camera.w * 0.38;
-          this._applyCamera(true);
-        } else {
-          this._rescaleSvgTypography();
-        }
-      } else {
-        this._rescaleSvgTypography();
-      }
-
-      const modernLoc = this._resolveModernLocationAt(lng, lat);
-      const { modernTitle, inModernChina } = modernLoc;
-      const closestOverall = this._findNearestSettlement(this._getCanonicalPlaces(), lng, lat, 160);
-      const identityModern = this._resolveModernIdentity(
-        lng,
-        lat,
-        this.activeTraceLabel,
-        modernTitle,
-        closestOverall
-      );
-
-      // A pass may own the heading only when it is nearer than the nearest settlement; otherwise a
-      // seat such as 陕州 (27 km from 函谷关) or 上洛 (9 km from 武关) would be titled as the pass.
-      const matchedPassHit = this._findNearbyPass(lng, lat, 30);
-      const matchedPass =
-        matchedPassHit && !(closestOverall && closestOverall.km < matchedPassHit.km)
-          ? matchedPassHit.pass
-          : null;
-      const titleMain = matchedPass
-        ? this._passName(matchedPass, this.year, this.locale)
-        : modernTitle
-          ? this.trTerm(modernTitle)
-          : this.uiStr('outside_modern', '现代省界外 / 海域');
-      const titleSuffix = matchedPass
-        ? ` · ${this.locale === 'en' ? matchedPass.modernEn : '今' + matchedPass.modernZh}`
-        : identityModern
-          ? ` · ${this.trModernCity(identityModern)}`
-          : '';
-      const traceLblText = this.activeTraceLabel
-        ? this.locale === 'en'
-          ? this.trTerm(this.activeTraceLabel)
-          : this.activeTraceLabel
-        : '';
-      if (traceLblText && traceLblText !== titleMain) {
-        const extraParts = [];
-        if (matchedPass) {
-          extraParts.push(this.locale === 'en' ? matchedPass.modernEn : '今' + matchedPass.modernZh);
-        } else {
-          if (modernTitle && modernTitle !== this.activeTraceLabel) {
-            const modTitleStr = this.trTerm(modernTitle);
-            if (modTitleStr !== traceLblText) extraParts.push(modTitleStr);
-          }
-          if (
-            identityModern &&
-            identityModern !== this.activeTraceLabel &&
-            identityModern !== modernTitle
-          ) {
-            const modCityStr =
-              this.locale === 'en'
-                ? this.trModernCity(identityModern)
-                : `今${identityModern}`;
-            if (modCityStr !== traceLblText && !extraParts.includes(modCityStr)) {
-              extraParts.push(modCityStr);
-            }
-          }
-        }
-        this._id('genealogy-heading').textContent =
-          traceLblText + (extraParts.length ? ` · ${extraParts.join(' · ')}` : '');
-      } else {
-        this._id('genealogy-heading').textContent = titleMain + titleSuffix;
-      }
-
-      const rowsData = [];
-      let totalEvents = 0;
-      let capDynasties = 0;
-
-      for (const d of this.dynasties) {
-        const isCurDyn = d === this.dynasties[this.dynastyIdx];
-        const targetYear = isCurDyn ? this.year : d.focusYear;
-        const snapKey = this._resolveSnapKey(d, targetYear);
-        const snap = this.snapshots[snapKey] || { polities: [], regions: [], prefectures: [] };
-        const eraHit = this._resolveEraPlaceAt(lng, lat, d, snap, modernLoc, closestOverall);
-        const polityHit = eraHit.polity;
-        const near = eraHit.near;
-        const adminHits = [];
-        if (d.key === 'prc') {
-          if (inModernChina) {
-            const provLabel = this.locale === 'en' ? this.trTerm(modernTitle) : modernTitle;
-            if (provLabel) adminHits.push(provLabel);
-            if (identityModern && !modernTitle.startsWith(identityModern)) {
-              const cityLabel =
-                this.locale === 'en' ? this.trModernCity(identityModern) : identityModern;
-              if (cityLabel && !adminHits.includes(cityLabel)) adminHits.push(cityLabel);
-            }
-          }
-        } else {
-          for (const item of [...eraHit.regionObjs, ...eraHit.prefObjs]) {
-            const isEmigre = item.category === '侨州' || item.category === '侨郡';
-            const label =
-              this.locale === 'en'
-                ? this.trTerm(item.title) + (isEmigre ? ' (Emigre)' : '')
-                : item.title +
-                  (item.category && !item.title.endsWith(item.category) ? `（${item.category}）` : '');
-            if (!adminHits.includes(label)) adminHits.push(label);
-          }
-        }
-        const isCapHere = Boolean(near && near.km <= 38 && near.s.isCapital);
-        if (isCapHere) capDynasties++;
-
-        const placeEvents = this._collectPlaceEventsForDynasty(d, lng, lat, near);
-        totalEvents += placeEvents.length;
-
-        rowsData.push({
-          d,
-          isCurDyn,
-          targetYear,
-          polityHit,
-          regionObjs: eraHit.regionObjs,
-          prefObjs: eraHit.prefObjs,
-          adminHits,
-          near,
-          isCapHere,
-          placeEvents,
-        });
-      }
-
-      this._id('genealogy-card').classList.remove('is-hidden');
-      const vf = this._id('viewport-frame');
-      if (vf) vf.classList.add('has-active-genealogy');
-      this._syncTracedPrefecture();
-      if (
-        this.activeMilestone &&
-        this.milestoneBalloon &&
-        !this.milestoneBalloon.classList.contains('is-hidden') &&
-        this.projector &&
-        typeof this.projector.greatCircleKm === 'function'
-      ) {
-        const amDyn = this.dynasties.find((d) => d.key === this.activeMilestone.dynastyKey);
-        const amAnchors = this._getMilestoneAnchors(amDyn, this.activeMilestone.milestone);
-        const matchIdx = amAnchors.findIndex(
-          (a) => a.coord && this.projector.greatCircleKm([lng, lat], a.coord) <= 30
-        );
-        if (matchIdx >= 0 && matchIdx !== this.activeMilestone.siteIdx) {
-          this._selectMilestoneAnchor(matchIdx, amAnchors);
-        }
-        this._positionMilestoneBalloon();
-      }
-
-      const renderSubAndList = () => {
-        const subEl = this._id('genealogy-sub');
-        const capInfo =
-          capDynasties > 0
-            ? this.locale === 'en'
-              ? ` · Capital in ${capDynasties} mapped era${capDynasties > 1 ? 's' : ''}`
-              : ` · 图中 ${capDynasties} 朝建都`
-            : '';
-        const coordText = `${lng.toFixed(2)}°E, ${lat.toFixed(2)}°N${capInfo}${
-          totalEvents === 0
-            ? ' · ' + this.uiStr('trace_click_hint', '点击任一朝代可切换地图')
-            : ''
-        }`;
-
-        const retP = this.activeReturnPerson;
-        const retBtnHtml = retP
-          ? `<button type="button" class="gen-filter-pill" id="act-return-person">‹ ${escHtml(
-              this.locale === 'en'
-                ? retP.labelEn || (retP.profile && retP.profile.en) || ''
-                : retP.labelZh || (retP.profile && retP.profile.zh) || ''
-            )}</button>`
-          : '';
-        if (totalEvents > 0 || retBtnHtml) {
-          const btnLabel = this.genealogyEventsOnly
-            ? this.locale === 'en'
-              ? 'All Dynasties'
-              : '历代全览'
-            : this.locale === 'en'
-              ? `Chronicles · ${totalEvents}`
-              : `史事纪要 · ${totalEvents}`;
-          const filterHtml =
-            totalEvents > 0
-              ? `<button type="button" class="gen-filter-pill gen-ev-toggle ${
-                  this.genealogyEventsOnly ? 'is-active' : ''
-                }">${btnLabel}</button>`
-              : '';
-          subEl.innerHTML =
-            `<span>${coordText}</span>` +
-            `<span class="person-sub-actions">${retBtnHtml}${filterHtml}</span>`;
-          const retBtn = this._id('act-return-person');
-          if (retBtn && retP) {
-            retBtn.addEventListener('click', (e) => {
-              e.stopPropagation();
-              this.openPersonChronicle(retP.profile, retP.eventIdx);
-            });
-          }
-          const filterBtn = subEl.querySelector('.gen-ev-toggle');
-          if (filterBtn) {
-            filterBtn.addEventListener('click', (e) => {
-              e.stopPropagation();
-              this.genealogyEventsOnly = !this.genealogyEventsOnly;
-              renderSubAndList();
-            });
-          }
-        } else {
-          subEl.textContent = coordText;
-        }
-
-        const loreEl = this._id('genealogy-lore');
-        const loreBanner = this._resolvePlaceLoreBanner(
-          lng,
-          lat,
-          matchedPass,
-          identityModern,
-          rowsData
-        );
-        if (loreEl) {
-          if (loreBanner && !this.genealogyEventsOnly) {
-            loreEl.innerHTML =
-              `<div class="pass-lore-head"><span class="pass-lore-badge">${loreBanner.badge}</span><span class="pass-lore-range">${loreBanner.tag}</span></div>` +
-              `<div class="pass-lore-desc">${loreBanner.desc}</div>`;
-            loreEl.classList.remove('is-hidden');
-          } else {
-            loreEl.innerHTML = '';
-            loreEl.classList.add('is-hidden');
-          }
-        }
-
-        const listEl = this._id('genealogy-timeline');
-        const scrollEl = this._id('genealogy-body') || listEl;
-        const prevScrollTop = scrollEl.scrollTop;
-        const hadItems = listEl.children.length > 0;
-        listEl.innerHTML = '';
-
-        const visibleRows = this.genealogyEventsOnly
-          ? rowsData.filter((r) => r.placeEvents.length > 0 || r.isCapHere)
-          : rowsData;
-
-        for (const r of visibleRows) {
-          const { d, isCurDyn, polityHit, adminHits, near, isCapHere, placeEvents } = r;
-          const li = document.createElement('li');
-          if (isCurDyn) li.classList.add('is-current');
-          const mainStr = adminHits.length
-            ? adminHits.join(' · ')
-            : polityHit
-              ? this.trTerm(polityHit)
-              : this.uiStr('beyond_recorded', '（域外 / 未设郡县）');
-
-          const defaultCapLabel = d.key === 'roc' || d.key === 'prc' ? '首都' : '王朝都城';
-          const capBadgeHtml = isCapHere
-            ? `<span class="t-cap-badge">${
-                this.locale === 'en'
-                  ? 'Capital'
-                  : (near.s.remark && near.s.remark.length <= 6 ? near.s.remark : defaultCapLabel)
-              }</span>`
-            : '';
-
-          const subParts = [];
-          if (adminHits.length && polityHit) {
-            subParts.push(`${this.uiStr('belongs_to', '属 ')}${this.trTerm(polityHit)}`);
-          }
-          if (near) {
-            const distStr =
-              near.km < 25
-                ? this.uiStr('at_here', '即此地')
-                : `${Math.round(near.km)} km`;
-            const rawNearAnc = this._settlementAncient(near.s, r.targetYear);
-            const nearCityName =
-              d.key === 'roc' || d.key === 'prc'
-                ? this.locale === 'en' &&
-                  near.s.rawModern &&
-                  !(this.enLocale.dict && this.enLocale.dict[rawNearAnc])
-                  ? this.trModernCity(near.s.rawModern)
-                  : this.trModernCity(rawNearAnc)
-                : this.trTerm(rawNearAnc);
-            const nearPrefix =
-              d.key === 'prc'
-                ? near.km < 25
-                  ? this.locale === 'en'
-                    ? 'Modern city: '
-                    : '现代城市：'
-                  : this.locale === 'en'
-                    ? 'Nearby city: '
-                    : '邻近城市：'
-                : this.uiStr('near_city', '邻近古城：');
-            subParts.push(
-              this.locale === 'en'
-                ? `${nearPrefix}${nearCityName} (${distStr})`
-                : `${nearPrefix}${nearCityName}（${distStr}）`
-            );
-            const capUsedRemark =
-              isCapHere && this.locale !== 'en' && near.s.remark && near.s.remark.length <= 6;
-            if (near.km < 25 && near.s.remark && !capUsedRemark) {
-              const remStr = this.locale === 'en' ? this.trTerm(near.s.remark) : near.s.remark;
-              if (remStr && !subParts.includes(remStr)) {
-                subParts.push(remStr);
-              }
-            }
-          }
-
-          let eventsHtml = '';
-          if (placeEvents.length) {
-            const evItems = placeEvents
-              .map((ev, evIdx) => {
-                const yrLabel =
-                  this.locale === 'en'
-                    ? this.formatYear(ev.year)
-                    : `${ev.year <= 0 ? '前' + -ev.year : ev.year}年`;
-                return `<div class="t-ev-row" data-ev-idx="${evIdx}"><span class="t-ev-yr">▸ ${yrLabel}</span><span class="t-ev-txt">${ev.text}</span></div>`;
-              })
-              .join('');
-            eventsHtml = `<div class="t-events">${evItems}</div>`;
-          }
-
-          li.innerHTML =
-            `<span class="t-era">${this.dynastyName(d)}</span>` +
-            `<span class="t-val">${mainStr}${capBadgeHtml}${
-              subParts.length ? `<span class="t-sub">${subParts.join(' · ')}</span>` : ''
-            }${eventsHtml}</span>`;
-
-          li.querySelectorAll('.t-ev-row').forEach((rowEl) => {
-            rowEl.addEventListener('click', (e) => {
-              e.stopPropagation();
-              const ev = placeEvents[Number(rowEl.dataset.evIdx)];
-              if (!ev) return;
-              this.stopAutoplay();
-              this._preserveGenealogyScrollOnce = true;
-              const targetY = this._clampYearToDynasty(d, ev.year);
-              this.jumpToYear(targetY);
-              if (ev.milestone) {
-                this.openMilestoneBalloon(d, ev.milestone);
-              }
-            });
-          });
-
-          li.addEventListener('click', () => {
-            this.stopAutoplay();
-            this._preserveGenealogyScrollOnce = true;
-            this.jumpToYear(d.focusYear);
-          });
-          listEl.appendChild(li);
-        }
-
-        const curLi = listEl.querySelector('li.is-current');
-        if (curLi && scrollEl.scrollHeight > scrollEl.clientHeight) {
-          const liTop = curLi.offsetTop - (scrollEl === listEl ? listEl.offsetTop : 0);
-          const liBottom = liTop + curLi.offsetHeight;
-          const alreadyVisible =
-            hadItems &&
-            isSamePlace &&
-            liTop >= prevScrollTop + 8 &&
-            liBottom <= prevScrollTop + scrollEl.clientHeight - 8;
-          if (preserveScroll || (fromYearSync && alreadyVisible)) {
-            scrollEl.scrollTop = prevScrollTop;
-          } else if (liTop + Math.min(curLi.offsetHeight, 84) <= scrollEl.clientHeight) {
-            scrollEl.scrollTop = 0;
-          } else {
-            const lead =
-              typeof window !== 'undefined' && window.innerWidth <= 900
-                ? 4
-                : scrollEl.clientHeight * 0.35;
-            scrollEl.scrollTop = Math.max(0, liTop - lead);
-          }
-        } else if (scrollEl) {
-          scrollEl.scrollTop = 0;
-        }
-        if (this.locale === 'zh-tw') this._applyZhHantDom(this._id('genealogy-card'));
-      };
-
-      renderSubAndList();
-      if (this.activeMilestone) this._positionMilestoneBalloon();
-    }
+    // Place Genealogy & Person Chronicles methods are attached by js/atlas_trace.js.
 
     // ---------------- Scrubber / Timeline ----------------
     _findDynastyIndex(y) {
@@ -9244,6 +6297,7 @@
         if (this._tlWindow) this._syncScrubberUi();
         this.isScrubbing = false;
         if (this.svg && this.svg.classList) this.svg.classList.remove('is-scrubbing');
+        this._revealScrubberYear();
         if (wasDragging && !this.activePerson && this.dynasties && this.dynasties[this.dynastyIdx]) {
           this._syncAutoMilestoneBalloon(this.dynasties[this.dynastyIdx]);
         }
@@ -9260,6 +6314,284 @@
           this._syncAutoMilestoneBalloon(this.dynasties[this.dynastyIdx]);
         }
       });
+    }
+
+    _bindScrubberNavigator() {
+      if (this.embed) return;
+      const railWrap = this._id('scrubber-rail-wrap');
+      const viewport = this._id('scrubber-viewport');
+      const content = this._id('scrubber-content');
+      const startEl = this._id('timeline-start');
+      const endEl = this._id('timeline-end');
+      const maskLeft = this._id('timeline-crop-mask-left');
+      const maskRight = this._id('timeline-crop-mask-right');
+      if (!railWrap || !viewport || !content || !startEl || !endEl) return;
+      const minSpan = 1 / 16;
+      let drag = null;
+      this._scrubberView = { start: 0, end: 1 };
+      this._syncScrubberNavigator();
+
+      const resetCropVisuals = () => {
+        railWrap.classList.remove('is-cropping');
+        startEl.classList.remove('is-active');
+        endEl.classList.remove('is-active');
+        startEl.style.transform = '';
+        endEl.style.transform = '';
+        if (maskLeft) maskLeft.style.width = '0px';
+        if (maskRight) maskRight.style.width = '0px';
+      };
+
+      const startDrag = (part, handleEl, e) => {
+        if ((e.button !== undefined && e.button !== 0) || this.challenge || drag) return;
+        const rect = viewport.getBoundingClientRect();
+        if (!rect.width) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this.stopAutoplay();
+        handleEl.focus({ preventScroll: true });
+        drag = {
+          ...this._scrubberView,
+          nextStart: this._scrubberView.start,
+          nextEnd: this._scrubberView.end,
+          part,
+          handleEl,
+          x: e.clientX,
+          width: rect.width,
+          pointerId: e.pointerId,
+        };
+        handleEl.setPointerCapture(e.pointerId);
+        handleEl.classList.add('is-active');
+        railWrap.classList.add('is-cropping');
+      };
+
+      const moveDrag = (e) => {
+        if (!drag || e.pointerId !== drag.pointerId) return;
+        const span = drag.end - drag.start;
+        const fracDelta = (e.clientX - drag.x) / drag.width;
+        const progressDelta = fracDelta * span;
+        const bubbleText = this._id('bubble-text');
+        const en = this.locale === 'en';
+        if (drag.part === 'start') {
+          if (fracDelta >= 0) {
+            const nextStart = Math.max(drag.start, Math.min(drag.end - minSpan, drag.start + progressDelta));
+            drag.nextStart = nextStart;
+            drag.nextEnd = drag.end;
+            const px = ((nextStart - drag.start) / span) * drag.width;
+            startEl.style.transform = `translateX(${px.toFixed(1)}px)`;
+            if (maskLeft) maskLeft.style.width = `${Math.max(0, px).toFixed(1)}px`;
+          } else {
+            // Pulling the left handle outward expands the visible window left in real time
+            const nextStart = Math.max(0, drag.start + progressDelta);
+            drag.nextStart = nextStart;
+            drag.nextEnd = drag.end;
+            startEl.style.transform = '';
+            if (maskLeft) maskLeft.style.width = '0px';
+            this._setScrubberView(nextStart, drag.end);
+          }
+          const y = this._progressToYear(drag.nextStart);
+          if (bubbleText) {
+            bubbleText.textContent = en
+              ? `Trim start: ${this.formatYear(y)} (release to zoom)`
+              : `${this._zh('裁切起点：')}${this.formatYear(y)}${this._zh('（松手自动放大）')}`;
+          }
+          this._positionScrubberBubble(drag.nextStart);
+        } else {
+          if (fracDelta <= 0) {
+            const nextEnd = Math.max(drag.start + minSpan, Math.min(drag.end, drag.end + progressDelta));
+            drag.nextStart = drag.start;
+            drag.nextEnd = nextEnd;
+            const px = ((drag.end - nextEnd) / span) * drag.width;
+            endEl.style.transform = `translateX(${-px.toFixed(1)}px)`;
+            if (maskRight) maskRight.style.width = `${Math.max(0, px).toFixed(1)}px`;
+          } else {
+            // Pulling the right handle outward expands the visible window right in real time
+            const nextEnd = Math.min(1, drag.end + progressDelta);
+            drag.nextStart = drag.start;
+            drag.nextEnd = nextEnd;
+            endEl.style.transform = '';
+            if (maskRight) maskRight.style.width = '0px';
+            this._setScrubberView(drag.start, nextEnd);
+          }
+          const y = this._progressToYear(drag.nextEnd);
+          if (bubbleText) {
+            bubbleText.textContent = en
+              ? `Trim end: ${this.formatYear(y)} (release to zoom)`
+              : `${this._zh('裁切终点：')}${this.formatYear(y)}${this._zh('（松手自动放大）')}`;
+          }
+          this._positionScrubberBubble(drag.nextEnd);
+        }
+      };
+
+      const finishDrag = (e, commit = false) => {
+        if (e && drag && e.pointerId !== drag.pointerId) return;
+        const activeDrag = drag;
+        drag = null;
+        resetCropVisuals();
+        if (commit && activeDrag) {
+          const curProg = this._yearToProgress(this.year);
+          if (curProg < activeDrag.nextStart) {
+            const minY = this._progressToYear(activeDrag.nextStart);
+            this._suppressScrubberReveal = true;
+            this.jumpToYear(minY);
+            this._suppressScrubberReveal = false;
+          } else if (curProg > activeDrag.nextEnd) {
+            const maxY = this._progressToYear(activeDrag.nextEnd);
+            this._suppressScrubberReveal = true;
+            this.jumpToYear(maxY);
+            this._suppressScrubberReveal = false;
+          }
+          const clampedProg = this._yearToProgress(this.year);
+          const finalStart = Math.min(activeDrag.nextStart, clampedProg);
+          const finalEnd = Math.max(activeDrag.nextEnd, clampedProg);
+          this._setScrubberView(finalStart, finalEnd);
+        }
+        this._syncScrubberUi();
+      };
+
+      let lastTapTime = 0;
+      let lastTapX = 0;
+      const checkDoubleTapReset = (e) => {
+        if (this.challenge) return false;
+        const now = Date.now();
+        const isDbl = now - lastTapTime < 300 && Math.abs(e.clientX - lastTapX) < 14;
+        lastTapTime = now;
+        lastTapX = e.clientX;
+        if (isDbl && this._scrubberView && this._scrubberView.end - this._scrubberView.start < 0.999) {
+          this._setScrubberView(0, 1);
+          return true;
+        }
+        return false;
+      };
+
+      for (const [part, el] of [
+        ['start', startEl],
+        ['end', endEl],
+      ]) {
+        el.addEventListener('pointerdown', (e) => {
+          if (checkDoubleTapReset(e)) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
+          startDrag(part, el, e);
+        });
+        el.addEventListener('pointermove', moveDrag);
+        el.addEventListener('pointerup', (e) => {
+          moveDrag(e);
+          finishDrag(e, true);
+        });
+        el.addEventListener('pointercancel', (e) => finishDrag(e, false));
+        el.addEventListener('lostpointercapture', (e) => finishDrag(e, false));
+        el.addEventListener('dblclick', (e) => {
+          e.stopPropagation();
+          if (!this.challenge) this._setScrubberView(0, 1);
+        });
+        el.addEventListener('keydown', (e) => {
+          e.stopPropagation();
+          if (e.isComposing || this.challenge) return;
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter'].includes(e.key)) return;
+          e.preventDefault();
+          this.stopAutoplay();
+          const { start, end } = this._scrubberView;
+          const span = end - start;
+          const delta = span * (e.shiftKey ? 0.2 : 0.04) * (e.key === 'ArrowLeft' ? -1 : 1);
+          if (e.key === 'Enter') {
+            this._setScrubberView(0, 1);
+          } else if (part === 'start') {
+            const next = e.key === 'Home' ? 0 : e.key === 'End' ? end - minSpan : start + delta;
+            this._setScrubberView(Math.max(0, Math.min(end - minSpan, next)), end);
+          } else {
+            const next = e.key === 'Home' ? start + minSpan : e.key === 'End' ? 1 : end + delta;
+            this._setScrubberView(start, Math.max(start + minSpan, Math.min(1, next)));
+          }
+        });
+      }
+
+      railWrap.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('.timeline-edge')) return;
+        checkDoubleTapReset(e);
+      }, true);
+      railWrap.addEventListener('dblclick', () => {
+        if (!this.challenge) this._setScrubberView(0, 1);
+      });
+
+      viewport.addEventListener('scroll', () => {
+        const span = this._scrubberView.end - this._scrubberView.start;
+        const start = Math.max(0, Math.min(1 - span, viewport.scrollLeft / content.clientWidth));
+        this._scrubberView = { start, end: start + span };
+        this._syncScrubberNavigator();
+        this._positionScrubberBubble(this._yearToProgress(this.year));
+      });
+      viewport.addEventListener('wheel', (e) => {
+        if (!viewport.classList.contains('is-zoomed') || !e.shiftKey || !e.deltaY || e.deltaX) return;
+        e.preventDefault();
+        const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? viewport.clientWidth : 1;
+        viewport.scrollLeft += e.deltaY * unit;
+      }, { passive: false });
+    }
+
+    _setScrubberView(start, end) {
+      // Use the existing dynasty-weighted progress scale for both the rail and edge handles.
+      const span = Math.max(1 / 16, Math.min(1, end - start));
+      start = Math.max(0, Math.min(1 - span, start));
+      const oldSpan = this._scrubberView ? this._scrubberView.end - this._scrubberView.start : 1;
+      this._scrubberView = { start, end: start + span };
+      const viewport = this._id('scrubber-viewport');
+      const content = this._id('scrubber-content');
+      if (!viewport || !content) return;
+      viewport.classList.toggle('is-zoomed', span < 1);
+      content.style.width = span < 1 ? `${100 / span}%` : '';
+      viewport.scrollLeft = start * content.clientWidth;
+      if (Math.abs(span - oldSpan) > 0.000001) this._fitBandLabels();
+      this._syncScrubberNavigator();
+      this._positionScrubberBubble(this._yearToProgress(this.year));
+    }
+
+    _syncScrubberNavigator() {
+      if (!this._scrubberView) return;
+      const { start, end } = this._scrubberView;
+      const span = end - start;
+      const en = this.locale === 'en';
+      const from = this.formatYear(this._progressToYear(start));
+      const to = this.formatYear(this._progressToYear(end));
+      const zoomFactor = `${Math.round(10 / span) / 10}×`;
+      for (const [part, min, max, value, label, valueText] of [
+        [
+          'start',
+          0,
+          end - 1 / 16,
+          start,
+          en ? 'Drag left edge inward to trim & zoom timeline (double-click to reset)' : this._zh('向内拖动左缘裁切放大时间轴；双击恢复全览'),
+          `${from} (${zoomFactor})`,
+        ],
+        [
+          'end',
+          start + 1 / 16,
+          1,
+          end,
+          en ? 'Drag right edge inward to trim & zoom timeline (double-click to reset)' : this._zh('向内拖动右缘裁切放大时间轴；双击恢复全览'),
+          `${to} (${zoomFactor})`,
+        ],
+      ]) {
+        const el = this._id(`timeline-${part}`);
+        if (!el) continue;
+        el.setAttribute('aria-label', label);
+        el.title = `${label} · ${from} — ${to}`;
+        el.setAttribute('aria-valuemin', String(Math.round(min * 1000)));
+        el.setAttribute('aria-valuemax', String(Math.round(max * 1000)));
+        el.setAttribute('aria-valuenow', String(Math.round(value * 1000)));
+        el.setAttribute('aria-valuetext', valueText);
+      }
+    }
+
+    _revealScrubberYear() {
+      if (!this._scrubberView || this.isScrubbing || this._suppressScrubberReveal) return;
+      const { start, end } = this._scrubberView;
+      const progress = this._yearToProgress(this.year);
+      if (progress < start || progress > end) {
+        const span = end - start;
+        this._setScrubberView(progress - span / 2, progress + span / 2);
+      }
     }
 
     _buildScrubberBands() {
@@ -9349,6 +6681,7 @@
       this._refreshBandLabels();
       window.addEventListener('resize', () => {
         this._scrubberRailWidth = 0;
+        if (this._scrubberView) this._setScrubberView(this._scrubberView.start, this._scrubberView.end);
         this._fitBandLabels();
         this._updateScaleBar();
         this._syncScrubberUi();
@@ -9445,8 +6778,8 @@
         return;
       }
       if (this._tlDragging && this._tlWindow) return;
-      const track = this._id('scrubber-track');
-      const width = (track && track.clientWidth) || 300;
+      const viewport = this._id('scrubber-viewport');
+      const width = (viewport && viewport.clientWidth) || 300;
       const w = this._tlWindow;
       if (w && w.idx === this.dynastyIdx && w.width === width && w.locale === this.locale) return;
       const d = this.dynasties[this.dynastyIdx];
@@ -9522,6 +6855,26 @@
       }
     }
 
+    _positionScrubberBubble(progress) {
+      const viewport = this._id('scrubber-viewport');
+      const bubble = this._id('scrubber-Bubble');
+      const bubbleText = this._id('bubble-text');
+      if (!viewport || !bubble || !bubbleText) return;
+      const railW = viewport.clientWidth || this._scrubberRailWidth || 300;
+      this._scrubberRailWidth = railW;
+      const view = this._scrubberView || { start: 0, end: 1 };
+      const span = Math.max(1e-6, view.end - view.start);
+      const handleX = ((progress - view.start) / span) * railW;
+      bubble.style.visibility = '';
+      const bW = bubble.offsetWidth || Math.max(84, Math.round(this._estimateLocalTextWidth(bubbleText.textContent, 12, 0) + 20));
+      const maxLeft = Math.max(0, railW - bW);
+      const leftPx = Math.max(0, Math.min(maxLeft, handleX - bW * 0.5));
+      bubble.style.left = '0px';
+      bubble.style.transform = `translateX(${leftPx.toFixed(1)}px)`;
+      const arrowX = Math.max(8, Math.min(bW - 8, handleX - leftPx));
+      bubble.style.setProperty('--arrow-left', `${arrowX.toFixed(1)}px`);
+    }
+
     _syncScrubberUi() {
       this._syncTimelineWindow();
       const pct = this._yearToProgress(this.year) * 100;
@@ -9529,10 +6882,6 @@
       const bubble = this._id('scrubber-Bubble');
       const bubbleText = this._id('bubble-text');
       if (bubble && bubbleText) {
-        if (!this._scrubberRailWidth) {
-          const wrap = this._id('scrubber-rail-wrap');
-          this._scrubberRailWidth = (wrap && wrap.clientWidth) || 300;
-        }
         const eraText = `${this.formatYear(this.year)} · ${this.formatEraLabel(this.year, d)}`;
         bubbleText.textContent = eraText;
         const yearsAgo = this._id('bubble-years-ago');
@@ -9545,18 +6894,7 @@
         } else {
           bubble.title = eraText;
         }
-        const railW = this._scrubberRailWidth || 300;
-        const bW = Math.max(84, Math.round(this._estimateLocalTextWidth(eraText, 12, 0) + 20));
-        const handleX = (pct / 100) * railW;
-        // Clamp bubble strictly inside [0, railW - bW] so text never clips off-screen
-        const maxLeft = Math.max(0, railW - bW);
-        const leftPx = Math.max(0, Math.min(maxLeft, handleX - bW * 0.5));
-        bubble.style.left = '0px';
-        bubble.style.transform = `translateX(${leftPx.toFixed(1)}px)`;
-
-        // Direct caret arrow to point straight at the timeline thumb
-        const arrowX = Math.max(8, Math.min(bW - 8, handleX - leftPx));
-        bubble.style.setProperty('--arrow-left', `${arrowX.toFixed(1)}px`);
+        this._positionScrubberBubble(pct / 100);
       }
 
       const motion = this._id('scrubber-motion');
@@ -9572,6 +6910,7 @@
       const track = this._id('scrubber-track');
       if (track) track.setAttribute('aria-valuenow', String(this.year));
       this._syncYearInput();
+      this._syncScrubberNavigator();
       if (this.embed) this._syncEmbedBadge();
       if (this._lastActiveBandIdx !== this.dynastyIdx) {
         const bandsEl = this._id('dynasty-bands');
@@ -9662,6 +7001,7 @@
       if (!this.activePerson && !this.isScrubbing) {
         this._syncAutoMilestoneBalloon(cur);
       }
+      this._revealScrubberYear();
       this._syncScrubberUi();
       const preserveScroll = Boolean(this._preserveGenealogyScrollOnce);
       this._preserveGenealogyScrollOnce = false;
@@ -9671,6 +7011,14 @@
           fromYearSync: true,
           preserveScroll,
         });
+      }
+      if (
+        this.narrating &&
+        (this.playing || this.personTimer) &&
+        !this.isScrubbing &&
+        typeof this.speakCurrentState === 'function'
+      ) {
+        this.speakCurrentState();
       }
     }
 
@@ -9704,6 +7052,7 @@
         if (this.personTimer) {
           clearInterval(this.personTimer);
           this.personTimer = null;
+          if (typeof this.silenceNarrator === 'function') this.silenceNarrator();
         }
         this.stepPersonEvent(dir > 0 ? 1 : -1);
         return;
@@ -9822,6 +7171,9 @@
           this._personAutoplayIntervalMs()
         );
       }
+      if (this.narrating && typeof this.onNarratorSpeedChange === 'function') {
+        this.onNarratorSpeedChange();
+      }
       return this.playSpeed;
     }
 
@@ -9862,13 +7214,16 @@
         clearInterval(this.personTimer);
         this.personTimer = null;
       }
+      if (this.year >= this.maxYear) this.jumpToYear(this.minYear);
       this.playing = true;
       this.closeMilestoneBalloon();
       this._updateAutoplayUi();
-      if (this.year >= this.maxYear) this.jumpToYear(this.minYear);
       // Leave the starting frame on screen for one event beat before the first jump.
       this.playHoldTicks = AUTOPLAY_EVENT_TICKS;
       this._syncAutoMilestoneBalloon(this.dynasties[this.dynastyIdx]);
+      if (this.narrating && typeof this.speakCurrentState === 'function') {
+        this.speakCurrentState({ forceIntro: true });
+      }
       this.playInterval = setInterval(() => this._autoplayTick(), this._autoplayIntervalMs());
     }
 
@@ -9898,6 +7253,7 @@
     }
 
     _autoplayTick() {
+      if (this.narrating && this._narratorSpeaking) return;
       if (this.playHoldTicks > 0) {
         this.playHoldTicks--;
         return;
@@ -9923,6 +7279,9 @@
       if (this.personTimer) {
         clearInterval(this.personTimer);
         this.personTimer = null;
+      }
+      if (typeof this.silenceNarrator === 'function') {
+        this.silenceNarrator();
       }
       this._updateAutoplayUi();
       const cur = this.dynasties[this.dynastyIdx];
@@ -11596,27 +8955,29 @@
           setSvgAttribute(shiftEl, 'transform', `translate(${p.ox.toFixed(2)},${p.oy.toFixed(2)})`);
         }
       }
-      const placedRects = pts.map((p) => {
-        const isCur = p.n.classList.contains('is-current');
-        const rPxY = p.isBead
-          ? 3.8 * pxPerLocal
-          : p.isPill
-            ? (isCur ? 6.5 : 5.6) * pxPerLocal
-            : (isCur ? 8.5 : 6.6) * pxPerLocal;
-        const rPxX = p.isBead
-          ? 3.8 * pxPerLocal
-          : p.isPill
-            ? (isCur ? 10.6 : 9.4) * pxPerLocal
-            : rPxY;
-        const cx = p.x * screenScale + p.ox * pxPerLocal;
-        const cy = p.y * screenScale + p.oy * pxPerLocal;
-        return {
-          left: cx - rPxX,
-          right: cx + rPxX,
-          top: cy - rPxY,
-          bottom: cy + rPxY,
-        };
-      });
+      const placedRects = pts
+        .filter((p) => !p.n.classList.contains('is-other-era'))
+        .map((p) => {
+          const isCur = p.n.classList.contains('is-current');
+          const rPxY = p.isBead
+            ? 3.8 * pxPerLocal
+            : p.isPill
+              ? (isCur ? 6.5 : 5.6) * pxPerLocal
+              : (isCur ? 8.5 : 6.6) * pxPerLocal;
+          const rPxX = p.isBead
+            ? 3.8 * pxPerLocal
+            : p.isPill
+              ? (isCur ? 10.6 : 9.4) * pxPerLocal
+              : rPxY;
+          const cx = p.x * screenScale + p.ox * pxPerLocal;
+          const cy = p.y * screenScale + p.oy * pxPerLocal;
+          return {
+            left: cx - rPxX,
+            right: cx + rPxX,
+            top: cy - rPxY,
+            bottom: cy + rPxY,
+          };
+        });
       const defaultSlots = [
         { idx: 0, anchor: 'middle', lx: '0', ly: '-12.2', nx: 0, ny: -12.2 },
         { idx: 1, anchor: 'middle', lx: '0', ly: '19.8', nx: 0, ny: 19.8 },
@@ -11629,6 +8990,7 @@
         { idx: 2, anchor: 'start', lx: '11.8', ly: '3.5', nx: 11.8, ny: 3.5 },
         { idx: 3, anchor: 'end', lx: '-11.8', ly: '3.5', nx: -11.8, ny: 3.5 },
       ];
+      const curPt = pts.find((item) => item.n.classList.contains('is-current')) || null;
       const labelOrder = pts
         .slice()
         .sort((a, b) => {
@@ -11640,18 +9002,26 @@
         const lbl = p.n.querySelector('.jn-label');
         if (!lbl || lbl.classList.contains('is-hover-only-label')) continue;
         const isCur = p.n.classList.contains('is-current');
-        const candSlots = p.isPill ? pillSlots : defaultSlots;
+        let candSlots = p.isPill ? pillSlots : defaultSlots;
+        if (p.isBead && curPt && curPt !== p) {
+          const vx = curPt.x - p.x;
+          const vy = curPt.y - p.y;
+          const orderIdxs =
+            Math.abs(vx) > Math.abs(vy) * 1.15
+              ? vx < 0
+                ? [2, 0, 1, 3]
+                : [3, 0, 1, 2]
+              : vy < 0
+                ? [1, 2, 3, 0]
+                : [0, 2, 3, 1];
+          candSlots = orderIdxs.map((idx) => defaultSlots[idx]);
+        }
         const fontPx = isCur || p.isPill ? 11.2 : 10.2;
         const textW = (this._estimateLocalTextWidth(lbl.textContent, fontPx, 0) + 3.6) * pxPerLocal;
         const textH = (fontPx * 1.18 + 2.4) * pxPerLocal;
         const cx = p.x * screenScale + p.ox * pxPerLocal;
         const cy = p.y * screenScale + p.oy * pxPerLocal;
-        const prevIdx =
-          zoomOnly && lbl.dataset.slotIdx !== undefined ? Number(lbl.dataset.slotIdx) : -1;
-        const orderedSlots =
-          prevIdx >= 0 && candSlots[prevIdx]
-            ? [candSlots[prevIdx], ...candSlots.filter((s0) => s0.idx !== prevIdx)]
-            : candSlots;
+        const orderedSlots = candSlots;
         let chosenSlot = null;
         let chosenRect = null;
         let leastOverlap = Infinity;
@@ -11755,196 +9125,7 @@
       this.flyRaf = requestAnimationFrame(step);
     }
 
-    clearCustomRoute() {
-      if (!this.activeCustomRoute) return;
-      this.activeCustomRoute = null;
-      this.customRouteStopIdx = -1;
-      if (this.grpJourney && !this.activePerson) {
-        this.grpJourney.innerHTML = '';
-      }
-      if (this.journeyCard) {
-        this.journeyCard.classList.add('is-hidden');
-        this.journeyCard.classList.remove('is-custom-route');
-        this.journeyCard.innerHTML = '';
-      }
-      const vf = this._id('viewport-frame');
-      if (vf) vf.classList.remove('has-active-journey');
-      this._syncMobileOverlayState();
-    }
-
-    selectCustomRouteStop(idx, panCamera = true) {
-      if (!Array.isArray(this.activeCustomRoute) || !this.activeCustomRoute.length) return;
-      const stops = this.activeCustomRoute;
-      const clampedIdx = Math.max(0, Math.min(stops.length - 1, idx));
-      this.customRouteStopIdx = clampedIdx;
-      const st = stops[clampedIdx];
-      if (!st) return;
-      if (st.year !== undefined && st.year !== this.year) {
-        this.jumpToYear(st.year);
-      }
-      this._drawCustomRouteOverlay(stops);
-      if (panCamera && st.lng !== undefined && st.lat !== undefined) {
-        const [tx, ty] = this.projector.toScreen(st.lng, st.lat);
-        const aspect = this._getViewportAspect();
-        const w = Math.max(320, Math.min(this.camera.w, 480));
-        const h = w * aspect;
-        // Embeds keep the place/person card at the top right like desktop, not as a bottom sheet.
-        const isDesktop = typeof window === 'undefined' || window.innerWidth > 900 || Boolean(this.embed);
-        const xFrac = isDesktop ? 0.38 : 0.5;
-        const yFrac = isDesktop ? 0.44 : 0.3;
-        this._animateCameraTo({ x: tx - w * xFrac, y: ty - h * yFrac, w, h });
-      }
-      this.openGenealogyAt(st.lng, st.lat, st.query || st.name);
-      this._renderCustomRouteCard();
-    }
-
-    stepCustomRoute(delta) {
-      if (!Array.isArray(this.activeCustomRoute) || !this.activeCustomRoute.length) return;
-      const len = this.activeCustomRoute.length;
-      const base = this.customRouteStopIdx < 0 ? (delta > 0 ? -1 : 0) : this.customRouteStopIdx;
-      const nextIdx = (base + delta + len) % len;
-      this.selectCustomRouteStop(nextIdx, true);
-    }
-
-    _renderCustomRouteCard() {
-      if (!this.journeyCard || !Array.isArray(this.activeCustomRoute) || this.activeCustomRoute.length < 2) {
-        return;
-      }
-      const stops = this.activeCustomRoute;
-      const curIdx = this.customRouteStopIdx;
-      const isEn = this.locale === 'en';
-      const isMultiYear = new Set(stops.map((s) => s.year)).size > 1;
-      const trackIds = Array.from(new Set(stops.map((s) => s.trackIdx || 0)));
-      const isMultiTrack = trackIds.length > 1;
-
-      let totalKm = 0;
-      for (let i = 0; i < stops.length - 1; i++) {
-        if ((stops[i].trackIdx || 0) === (stops[i + 1].trackIdx || 0)) {
-          totalKm += this.projector.greatCircleKm(stops[i].coord, stops[i + 1].coord);
-        }
-      }
-      const distStr =
-        totalKm > 0
-          ? isEn
-            ? `~${Math.round(totalKm)} km`
-            : `全程约 ${Math.round(totalKm)} km`
-          : '';
-
-      let stopsBodyHtml = '';
-      if (!isMultiTrack) {
-        const pillsHtml = stops
-          .map((st, i) => {
-            const rawLbl = st.query || st.name;
-            const baseLbl = isEn ? this.trTerm(rawLbl) : this._zh(rawLbl);
-            const yrTag =
-              st.year < 0 ? (isEn ? `${-st.year} BCE` : `前${-st.year}`) : `${st.year}`;
-            const lbl = isMultiYear && st.year !== undefined ? `${baseLbl} (${yrTag})` : baseLbl;
-            const cls = i === curIdx ? 'cr-stop-pill is-current' : 'cr-stop-pill';
-            return `<button type="button" class="${cls}" data-cidx="${i}"><span class="cr-stop-num">${i + 1}</span><span>${escHtml(lbl)}</span></button>`;
-          })
-          .join('<span class="cr-stop-arrow">→</span>');
-        stopsBodyHtml = `<div class="cr-stops-list">${pillsHtml}</div>`;
-      } else {
-        const palette = HistoricalAtlasController.PERSON_TRACK_PALETTE;
-        const rowsHtml = trackIds
-          .map((tId, tPos) => {
-            const color = palette[tPos % palette.length];
-            const tStops = stops
-              .map((st, globalIdx) => ({ st, globalIdx }))
-              .filter((item) => (item.st.trackIdx || 0) === tId);
-            const pills = tStops
-              .map(({ st, globalIdx }, sPos) => {
-                const rawLbl = st.query || st.name;
-                const baseLbl = isEn ? this.trTerm(rawLbl) : this._zh(rawLbl);
-                const yrTag =
-                  st.year < 0 ? (isEn ? `${-st.year} BCE` : `前${-st.year}`) : `${st.year}`;
-                const lbl = isMultiYear && st.year !== undefined ? `${baseLbl} (${yrTag})` : baseLbl;
-                const isCur = globalIdx === curIdx;
-                const convCls = st.convergence ? ' is-converge' : '';
-                const cls = `cr-stop-pill${isCur ? ' is-current' : ''}${convCls}`;
-                return `<button type="button" class="${cls}" style="--track-color:${color}" data-cidx="${globalIdx}"><span class="cr-stop-num">${sPos + 1}</span><span>${escHtml(lbl)}</span></button>`;
-              })
-              .join('<span class="cr-stop-arrow">→</span>');
-            return (
-              `<div class="cr-track-row">` +
-              `<span class="cr-track-dot" style="background:${color}"></span>` +
-              `<div class="cr-stops-list">${pills}</div>` +
-              `</div>`
-            );
-          })
-          .join('');
-        stopsBodyHtml = `<div class="cr-multitrack-wrap">${rowsHtml}</div>`;
-      }
-
-      this.journeyCard.classList.remove('is-hidden', 'is-collapsed');
-      this.journeyCard.classList.add('is-custom-route');
-      const vf = this._id('viewport-frame');
-      if (vf) vf.classList.add('has-active-journey');
-      this._syncMobileOverlayState();
-
-      this.journeyCard.innerHTML =
-        `<div class="jc-top-bar">` +
-        `<span class="jc-step-badge" style="background:${isMultiTrack ? '#bd2d22' : '#9e2a2b'}">${
-          isMultiTrack
-            ? isEn
-              ? `${trackIds.length} Routes · ${stops.length} Stops`
-              : `${trackIds.length} 路行迹 · 共 ${stops.length} 站`
-            : isEn
-              ? `Route · ${stops.length} Stops`
-              : `行迹路线 · 共 ${stops.length} 站`
-        }</span>` +
-        (distStr ? `<span class="cr-dist-label">${distStr}</span>` : '') +
-        `<div class="cr-top-actions">` +
-        `<button type="button" class="jc-close-btn" id="act-custom-overview" title="${
-          isEn ? 'Fit entire route on map' : '全线总览视图'
-        }">${isEn ? 'Full Route' : '全线视图'}</button>` +
-        `<button type="button" class="jc-close-btn" id="act-close-custom-route" title="${
-          isEn ? 'Clear Route (Esc)' : '清除自定义路线 (Esc)'
-        }">${isEn ? 'Clear ×' : '清除路线 ×'}</button>` +
-        `</div>` +
-        `</div>` +
-        `<div class="cr-stops-bar">` +
-        `${stopsBodyHtml}` +
-        `<div class="jc-controls">` +
-        `<button type="button" class="jc-nav-btn" id="act-custom-prev">${SVG_ICONS.arrowLeft} ${
-          isEn ? 'Prev' : '上一站'
-        }</button>` +
-        `<button type="button" class="jc-nav-btn is-primary" id="act-custom-next">${
-          isEn ? 'Next' : '下一站'
-        } ${SVG_ICONS.arrowRight}</button>` +
-        `</div>` +
-        `</div>`;
-
-      this.journeyCard.querySelectorAll('.cr-stop-pill').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          this.selectCustomRouteStop(Number(btn.dataset.cidx), true);
-        });
-      });
-      const prevBtn = this._id('act-custom-prev');
-      if (prevBtn) {
-        prevBtn.addEventListener('click', () => this.stepCustomRoute(-1));
-      }
-      const nextBtn = this._id('act-custom-next');
-      if (nextBtn) {
-        nextBtn.addEventListener('click', () => this.stepCustomRoute(1));
-      }
-      const ovBtn = this._id('act-custom-overview');
-      if (ovBtn) {
-        ovBtn.addEventListener('click', () => {
-          this.closeGenealogyCard();
-          this.customRouteStopIdx = -1;
-          this._renderCustomRoute(stops);
-        });
-      }
-      const closeBtn = this._id('act-close-custom-route');
-      if (closeBtn) {
-        closeBtn.addEventListener('click', () => {
-          this.clearCustomRoute();
-          this.closeGenealogyCard();
-        });
-      }
-      if (this.locale === 'zh-tw') this._applyZhHantDom(this.journeyCard);
-    }
+    // Custom Route & AI-Native Public API methods are attached by js/atlas_api.js.
 
     _syncUserLocationUi() {
       const button = this._id('act-user-location');
@@ -12158,1392 +9339,9 @@
 
     // Quiz / Dual-Mode Challenge methods are attached by js/atlas_quiz.js.
 
-    // ---------------- Historical Journeys (青史行迹) ----------------
-    static get HISTORICAL_JOURNEYS() {
-      return (window.ATLAS_LORE_DATA && window.ATLAS_LORE_DATA.HISTORICAL_JOURNEYS) || [];
-    }
+    // Historical Journeys (青史行迹) methods are attached by js/atlas_trace.js.
 
-    _getCustomRouteVisibleTopFrac() {
-      if (typeof window === 'undefined' || window.innerWidth > 900) return 1;
-      const vf = this._id('viewport-frame');
-      if (
-        vf &&
-        this.journeyCard &&
-        typeof vf.getBoundingClientRect === 'function' &&
-        typeof this.journeyCard.getBoundingClientRect === 'function' &&
-        !this.journeyCard.classList.contains('is-hidden')
-      ) {
-        const vfRect = vf.getBoundingClientRect();
-        const jcRect = this.journeyCard.getBoundingClientRect();
-        if (
-          vfRect.height > 80 &&
-          jcRect.height > 20 &&
-          jcRect.top > vfRect.top + vfRect.height * 0.25
-        ) {
-          return Math.max(0.42, Math.min(0.92, (jcRect.top - vfRect.top - 10) / vfRect.height));
-        }
-      }
-      return 0.72;
-    }
-
-    _buildJourneySegmentInfo(c1, c2, viaCoords, curveBiasOffset = 0) {
-      if (!c1 || !c2) return null;
-      const geoPts = [c1, ...(viaCoords || []), c2];
-      const pts = geoPts.map((pt) => this.projector.toScreen(pt[0], pt[1]));
-      const first = pts[0];
-      const last = pts[pts.length - 1];
-      const chord = Math.hypot(last[0] - first[0], last[1] - first[1]);
-      if (chord < 8) return null;
-
-      if (pts.length === 2) {
-        const [x1, y1] = first;
-        const [x2, y2] = last;
-        const dx = x2 - x1;
-        const dy = y2 - y1;
-        const bend = Math.max(9, Math.min(34, chord * 0.165)) + curveBiasOffset;
-        const cx = (x1 + x2) * 0.5 - (dy / chord) * bend;
-        const cy = (y1 + y2) * 0.5 + (dx / chord) * bend;
-        const t = 0.53;
-        const mt = 1 - t;
-        const mx = mt * mt * x1 + 2 * mt * t * cx + t * t * x2;
-        const my = mt * mt * y1 + 2 * mt * t * cy + t * t * y2;
-        const tx = 2 * mt * (cx - x1) + 2 * t * (x2 - cx);
-        const ty = 2 * mt * (cy - y1) + 2 * t * (y2 - cy);
-        return {
-          d: `M${x1.toFixed(1)} ${y1.toFixed(1)}Q${cx.toFixed(1)} ${cy.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`,
-          mx,
-          my,
-          angleDeg: (Math.atan2(ty, tx) * 180) / Math.PI,
-          chord,
-        };
-      }
-
-      let d = `M${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
-      const midSeg = Math.floor((pts.length - 1) * 0.5);
-      let mx = (first[0] + last[0]) * 0.5;
-      let my = (first[1] + last[1]) * 0.5;
-      let angleDeg = (Math.atan2(last[1] - first[1], last[0] - first[0]) * 180) / Math.PI;
-      for (let i = 0; i < pts.length - 1; i++) {
-        const p0 = pts[Math.max(0, i - 1)];
-        const p1 = pts[i];
-        const p2 = pts[i + 1];
-        const p3 = pts[Math.min(pts.length - 1, i + 2)];
-        const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
-        const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
-        const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
-        const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
-        d += `C${cp1x.toFixed(1)} ${cp1y.toFixed(1)},${cp2x.toFixed(1)} ${cp2y.toFixed(1)},${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
-        if (i === midSeg) {
-          mx = 0.125 * p1[0] + 0.375 * cp1x + 0.375 * cp2x + 0.125 * p2[0];
-          my = 0.125 * p1[1] + 0.375 * cp1y + 0.375 * cp2y + 0.125 * p2[1];
-          const tx = 0.75 * (cp1x - p1[0]) + 1.5 * (cp2x - cp1x) + 0.75 * (p2[0] - cp2x);
-          const ty = 0.75 * (cp1y - p1[1]) + 1.5 * (cp2y - cp1y) + 0.75 * (p2[1] - cp2y);
-          angleDeg = (Math.atan2(ty, tx) * 180) / Math.PI;
-        }
-      }
-      return { d, mx, my, angleDeg, chord };
-    }
-
-    _renderCartographicTrajectory(segments, curIdx, accentColor = '#bd2d22', dimmed = false) {
-      if (!this.grpJourney || !Array.isArray(segments) || !segments.length) return;
-      const applyDim = (el) => {
-        if (dimmed && el && el.style) el.style.opacity = '0.32';
-        return el;
-      };
-      const appendChevron = (seg, cls) => {
-        const g = this._svgNode(
-          'g',
-          {
-            class: `journey-dir-mark${cls ? ' ' + cls : ''}`,
-            'data-x': seg.mx.toFixed(1),
-            'data-y': seg.my.toFixed(1),
-            'data-rot': seg.angleDeg.toFixed(1),
-          },
-          this.grpJourney
-        );
-        g.style.color = accentColor;
-        applyDim(g);
-        this._svgNode(
-          'path',
-          { d: 'M-4.5 -3.15L3.55 0L-4.5 3.15L-2.3 0Z', class: 'journey-chevron' },
-          g
-        );
-      };
-
-      if (curIdx < 0) {
-        const fullD = segments.map((s) => s.d).join(' ');
-        applyDim(this._svgNode('path', { d: fullD, class: 'journey-track-halo' }, this.grpJourney));
-        applyDim(
-          this._svgNode(
-            'path',
-            { d: fullD, class: 'journey-track-thread', stroke: accentColor },
-            this.grpJourney
-          )
-        );
-        const placedMarks = [];
-        for (const seg of segments) {
-          if (seg.chord < 20) continue;
-          if (placedMarks.some(([px, py]) => Math.hypot(px - seg.mx, py - seg.my) < 15)) continue;
-          placedMarks.push([seg.mx, seg.my]);
-          appendChevron(seg, '');
-        }
-        return;
-      }
-
-      const passedSegs = segments.filter((s) => s.toIdx < curIdx);
-      const passedD = passedSegs.map((s) => s.d).join(' ');
-      const focusSeg = segments.find((s) => s.toIdx === curIdx) || null;
-      const upcomingD = segments.filter((s) => s.toIdx > curIdx).map((s) => s.d).join(' ');
-      const bgD = [passedD, upcomingD].filter(Boolean).join(' ');
-      if (bgD) {
-        this._svgNode('path', { d: bgD, class: 'journey-track-halo' }, this.grpJourney);
-      }
-      if (upcomingD) {
-        this._svgNode(
-          'path',
-          { d: upcomingD, class: 'journey-track-upcoming', stroke: accentColor },
-          this.grpJourney
-        );
-      }
-      if (passedD) {
-        this._svgNode(
-          'path',
-          { d: passedD, class: 'journey-track-passed', stroke: accentColor },
-          this.grpJourney
-        );
-        const placedMuted = [];
-        for (const seg of passedSegs) {
-          if (seg.chord < 26) continue;
-          if (placedMuted.some(([px, py]) => Math.hypot(px - seg.mx, py - seg.my) < 18)) continue;
-          placedMuted.push([seg.mx, seg.my]);
-          appendChevron(seg, 'is-muted');
-        }
-      }
-      if (focusSeg) {
-        this._svgNode(
-          'path',
-          { d: focusSeg.d, class: 'journey-track-halo is-focus' },
-          this.grpJourney
-        );
-        this._svgNode(
-          'path',
-          { d: focusSeg.d, class: 'journey-track-focus', stroke: accentColor },
-          this.grpJourney
-        );
-        appendChevron(focusSeg, 'is-focus');
-      }
-    }
-
-    // ---------------- Global Quick Search ----------------
-    _searchPlaceholder(expanded = false) {
-      if (this.locale === 'en') {
-        return expanded
-          ? 'Search figure (or 2–3: Li Bai, Du Fu, Gao Shi) / city / era'
-          : 'Search figure / multi-person / city / era';
-      }
-      return this._zh(
-        expanded
-          ? '搜人物（可搜双人/三人：李白 杜甫 高适）/ 古今地名 / 年号'
-          : '搜人物 / 多人同看 / 古今地名 / 年号'
-      );
-    }
-
-    _getSearchSampleQueries() {
-      return this.locale === 'en'
-        ? ["Chang'an", 'Chibi', 'Cao Cao', 'Li Bai, Du Fu, Gao Shi']
-        : ['长安', '赤壁', '霍去病', '李白 杜甫 高适'].map((s) => this._zh(s));
-    }
-
-    _getSearchShowcasePool() {
-      const index = this._ensureSearchIndex();
-      if (Array.isArray(index._showcasePool)) return index._showcasePool;
-      const showcaseSpecs = [
-        'sushi',
-        ['libai', 'dufu'],
-        'zhugeliang',
-        ['libai', 'dufu', 'gaoshi'],
-        'huoqubing',
-        ['caocao', 'liubei', 'sunquan'],
-        'libai',
-        ['yanghu', 'duyu'],
-        'caocao',
-        ['zhugeliang', 'simayi'],
-        'xinqiji',
-        ['zuti', 'liukun'],
-        'xuanzang',
-        'wangyangming',
-        'zhangqian',
-        'dufu',
-      ];
-      const pool = [];
-      for (const spec of showcaseSpecs) {
-        if (Array.isArray(spec)) {
-          const profiles = this._resolvePersonProfiles(spec);
-          if (profiles.length >= 2) {
-            const st = this._buildPersonTracksAndEvents(profiles);
-            if (st && st.isMulti) {
-              const d = st.events[0] ? st.events[0].dynasty : this.dynasties[0];
-              pool.push({
-                kind: 'multi_person',
-                personKeys: profiles.map((p) => p.key),
-                personProfiles: profiles,
-                dynasty: d,
-                year: null,
-                titleZh: profiles.map((p) => p.zh).join(' × '),
-                subZh:
-                  st.sameTimeCount > 0
-                    ? `共 ${st.events.length} 处行迹 · ${st.sameTimeCount} 处相逢`
-                    : `并行行迹对照 · 共 ${st.events.length} 处行迹`,
-                titleEn: profiles.map((p) => p.en).join(' × '),
-                subEn:
-                  st.sameTimeCount > 0
-                    ? `${st.events.length} stops · ${st.sameTimeCount} encounters`
-                    : `${st.events.length} stops`,
-              });
-            }
-          }
-        } else {
-          const hit = index.find((item) => item.kind === 'person' && item.personKey === spec);
-          if (hit) pool.push(hit);
-        }
-      }
-      Object.defineProperty(index, '_showcasePool', {
-        value: pool,
-        enumerable: false,
-        configurable: true,
-      });
-      return pool;
-    }
-
-    _ensureSearchIndex() {
-      if (!this._fullSnapshotsLoaded && typeof window !== 'undefined') {
-        this._ensureFullSnapshots();
-      }
-      if (this.searchIndex) return this.searchIndex;
-      const entries = [];
-      const compiledEraSpans = this._getCompiledEraSpans();
-      const DYN_ALIASES_MAP = {
-        zhanguo: ['战国七雄', '春秋战国'],
-        qin: ['秦朝', '大秦', '秦'],
-        xihan: ['汉', '汉朝', '前汉', '两汉'],
-        donghan: ['汉', '汉朝', '两汉'],
-        sanguo: ['魏蜀吴'],
-        xijin: ['晋', '晋朝', '两晋'],
-        dongjin: ['东晋', '晋', '晋朝', '两晋', '十六国', '五胡十六国'],
-        nanbei: ['南朝', '北朝', '六朝'],
-        sui: ['隋朝', '大隋', '隋'],
-        tang: ['唐朝', '大唐', '李唐', '唐'],
-        wudai: ['五代', '十国'],
-        beisong: ['宋', '宋朝', '两宋', '大宋', '赵宋'],
-        nansong: ['宋', '宋朝', '两宋', '大宋', '赵宋'],
-        yuan: ['元朝', '大元', '蒙元', '元'],
-        ming: ['明朝', '大明', '朱明', '明'],
-        qing: ['清朝', '大清', '满清', '清'],
-        roc: ['民国', '国民政府', '北洋政府'],
-        prc: ['中国', '现代', '当代', '新中国'],
-      };
-      const extractCoreRegimes = (zhTitle, titles = []) => {
-        const out = new Set();
-        const addFrom = (s) => {
-          const bare = String(s || '').replace(/[（(][^）)]*[）)]/g, '').trim();
-          if (!bare) return;
-          if (bare.length === 1 && CORE_REGIME_CHARS.has(bare)) out.add(bare);
-          if (bare.endsWith('国') && bare.length === 2 && CORE_REGIME_CHARS.has(bare[0])) {
-            out.add(bare[0]);
-          }
-          const stripped = bare.replace(
-            /^(?:东|西|南|北|前|后|大|成|蜀|季|刘|曹|孙|杨|马|冉|谯|胡|桓|武|明|古|韩)/,
-            ''
-          );
-          if (stripped.length === 1 && CORE_REGIME_CHARS.has(stripped)) {
-            out.add(stripped);
-          }
-        };
-        addFrom(zhTitle);
-        for (const t of titles) addFrom(t);
-        return [...out];
-      };
-
-      // 0a. Historical Figures Chronicle Index (点人溯事)
-      for (const p of HistoricalAtlasController.PERSON_PROFILES) {
-        const d =
-          this.dynasties.find((item) => item.key === p.dynastyKey) ||
-          this.dynasties[this._findDynastyIndex(p.span ? p.span[0] : 0)] ||
-          this.dynasties[0];
-        const evCount = this._collectPersonEvents(p).length;
-        const aliases = this._personSearchAliases(p);
-        const eraNames = [];
-        if (!p.isRelic) {
-          const pText = `${p.zh} ${p.courtesyZh || ''} ${aliases.join(' ')}`;
-          for (const c of compiledEraSpans) {
-            if (
-              c.monarchZh &&
-              c.monarchZh.length >= 2 &&
-              (pText.includes(c.monarchZh) ||
-                (c.shortMonarch && c.shortMonarch.length >= 3 && pText.includes(c.shortMonarch)))
-            ) {
-              if (c.eraOnly && c.eraOnly.length >= 2) eraNames.push(c.eraOnly);
-            }
-          }
-        }
-        const briefCourtesyZh = (p.courtesyZh || d.title).split(/\s*·\s*/)[0];
-        const rawFirstEn = (p.courtesyEn || d.title).split(/\s*(?:·|,)\s*/)[0];
-        const briefCourtesyEn = rawFirstEn.length <= 14 ? rawFirstEn : '';
-        entries.push({
-          kind: 'person',
-          personKey: p.key,
-          personProfile: p,
-          dynasty: d,
-          year: null,
-          aliases,
-          titleZh: p.zh,
-          subZh: p.isRelic
-            ? `${briefCourtesyZh} · 历 10 朝 ${evCount} 站流转`
-            : `${briefCourtesyZh} · 共 ${evCount} 处史事`,
-          titleEn: p.en,
-          subEn: p.isRelic
-            ? `${briefCourtesyEn || 'Heshi Bi Jade'} · ${evCount} stops across 10 eras`
-            : briefCourtesyEn
-              ? `${briefCourtesyEn} · ${evCount} events`
-              : `${evCount} chronicle events`,
-          keywords: `${p.zh} ${p.en} ${p.courtesyZh || ''} ${p.courtesyEn || ''} ${aliases.join(' ')} ${eraNames.join(' ')} ${p.isRelic ? '国器 宝物 传国玉玺 传国玺 玉玺 和氏璧 relic seal' : '人物 生平 事迹 行迹'}`.toLowerCase(),
-        });
-      }
-
-      // 0b. Map Pinpoint Quiz Mode (舆图寻址 · 古地名小试)
-      entries.push({
-        kind: 'quiz',
-        dynasty: this.dynasties[2] || this.dynasties[0],
-        year: null,
-        titleZh: '舆图寻址 · 古地名小试',
-        subZh: '盲图标点历代名城与雄关 · 10题计分',
-        titleEn: 'Map Pinpoint · Ancient Place Quiz',
-        subEn: 'Pinpoint 10 ancient cities & strategic passes on the map',
-        keywords: '舆图寻址 古地名小试 挑战 猜地名 雅集 quiz pinpoint challenge game'.toLowerCase(),
-      });
-
-      // 0. Dynasties / Historical Periods
-      for (const d of this.dynasties) {
-        const enDyn = (this.enLocale.dynasties && this.enLocale.dynasties[d.key]) || {};
-        const nameEn = enDyn.name || d.title;
-        const shortEn = enDyn.short || d.badge || d.title;
-        const dAliases = (DYN_ALIASES_MAP[d.key] || []).map((a) => a.toLowerCase());
-        const coreRegimes = extractCoreRegimes(d.title, dAliases);
-        const spanZh =
-          d.key === 'prc'
-            ? `${d.fromYear}—`
-            : `${d.fromYear <= 0 ? '前' + -d.fromYear : d.fromYear}—${d.toYear <= 0 ? '前' + -d.toYear : d.toYear}`;
-        const spanEn =
-          d.key === 'prc'
-            ? `${d.fromYear} CE –`
-            : `${d.fromYear <= 0 ? -d.fromYear + ' BCE' : d.fromYear + ' CE'} – ${d.toYear <= 0 ? -d.toYear + ' BCE' : d.toYear + ' CE'}`;
-        entries.push({
-          kind: 'dynasty',
-          dynasty: d,
-          year: d.focusYear,
-          titleZh: d.title,
-          subZh: `${spanZh} · 都城：${d.seat}`,
-          titleEn: nameEn,
-          subEn: `${spanEn} · ${enDyn.capital || d.seat}`,
-          aliases: dAliases,
-          coreRegimes,
-          keywords: `${d.title} ${d.badge || ''} ${d.seat || ''} ${nameEn} ${shortEn} ${dAliases.join(' ')}`.toLowerCase(),
-        });
-      }
-
-      // 0b. Regional & rival regimes (割据 / 并立政权)
-      const yrZh = (y) => (y <= 0 ? `前${-y}` : `${y}`);
-      const yrEn = (y) => (y <= 0 ? `${-y} BCE` : `${y} CE`);
-      for (const p of HistoricalAtlasController.POLITY_PROFILES) {
-        const bareZhPol = p.zh.replace(/[（(][^）)]*[）)]/g, '').trim().toLowerCase();
-        const bareTitles = p.titles
-          .map((t) => t.replace(/[（(][^）)]*[）)]/g, '').trim().toLowerCase())
-          .filter(Boolean);
-        const exactPolityTitles = [
-          ...new Set([bareZhPol, ...p.titles.map((t) => t.toLowerCase()), ...bareTitles]),
-        ].filter(Boolean);
-        const aliases = [
-          ...new Set([...(p.aliases || []).map((a) => a.toLowerCase()), ...exactPolityTitles]),
-        ];
-        const coreRegimes = extractCoreRegimes(p.zh, p.titles);
-        const rulersText = this._polityRulers({ ...p, curated: true }) || '';
-        const founderExtra =
-          p.key === 'caowei'
-            ? '曹操 魏武帝'
-            : p.key === 'shuhan'
-              ? '刘备 诸葛亮'
-              : p.key === 'sunwu'
-                ? '孙权 孙策'
-                : '';
-        entries.push({
-          kind: 'polity',
-          polityKey: p.key,
-          dynasty: this.dynasties[this._findDynastyIndex(Math.max(this.minYear, p.from))],
-          year: null,
-          titleZh: p.zh,
-          subZh: `${yrZh(p.from)}—${yrZh(p.to)} · 都城：${p.seatZh}`,
-          titleEn: p.en,
-          subEn: `${yrEn(p.from)} – ${yrEn(p.to)} · ${p.seatEn}`,
-          exactPolityTitles,
-          coreRegimes,
-          politySpan: Math.max(1, (p.to || 0) - (p.from || 0)),
-          polityFrom: p.from || 0,
-          aliases,
-          keywords: `${p.zh} ${p.en} ${aliases.join(' ')} ${p.seatZh || ''} ${p.seatEn || ''} ${rulersText} ${p.rulersEn || ''} ${founderExtra}`.toLowerCase(),
-        });
-      }
-
-      // 1. Historical Settlements (Ancient & Modern Cities)
-      for (const d of this.dynasties) {
-        const isModernDyn = d.key === 'roc' || d.key === 'prc';
-        const enDyn = (this.enLocale.dynasties && this.enLocale.dynasties[d.key]) || {};
-        const dynNameEn = enDyn.name || d.title;
-        for (const s of d.settlements || []) {
-          const yr = s.appear !== undefined ? Math.max(d.fromYear, s.appear) : d.focusYear;
-          const rawAncEn = this._enDict(s.ancient);
-          const ancEn = isModernDyn ? this._enModernCity(s.ancient) : rawAncEn;
-          const modEn = this._enModernCity(s.modern || '');
-          const remEn = this._enDict(s.remark || '');
-          const sAliases = (s.aliases || [])
-            .flatMap((a) => [String(a || '').toLowerCase(), this._enDict(a).toLowerCase()])
-            .filter(Boolean);
-          entries.push({
-            kind: 'city',
-            dynasty: d,
-            year: yr,
-            coord: s.coord,
-            tier: s.tier || 1,
-            isCapital: Boolean(s.isCapital),
-            titleZh: s.ancient,
-            modernZh: s.modern || '',
-            remarkZh: s.remark || '',
-            subZh: s.modern && s.modern !== s.ancient ? `今${s.modern}` : s.remark || '',
-            titleEn: ancEn,
-            modernEn: modEn,
-            remarkEn: remEn || '',
-            subEn: s.modern && s.modern !== s.ancient ? `Now ${modEn}` : remEn,
-            aliases: sAliases,
-            keywords: `${s.ancient} ${(s.aliases || []).join(' ')} ${s.modern || ''} ${s.remark || ''} ${d.title} ${dynNameEn} ${rawAncEn} ${ancEn} ${modEn} ${remEn} ${sAliases.join(' ')}`.toLowerCase(),
-          });
-        }
-      }
-
-      // 1b. Strategic Historical Passes (名关雄隘 · 天下锁钥)
-      for (const p of HistoricalAtlasController.STRATEGIC_PASSES) {
-        const dIdx = this._findDynastyIndex(p.focusYear || -200);
-        const d = this.dynasties[dIdx] || this.dynasties[0];
-        const aliases = (p.aliases || []).map((a) => a.toLowerCase());
-        const aliasStr = aliases.join(' ');
-        entries.push({
-          kind: 'pass',
-          passKey: p.key,
-          dynasty: d,
-          year: p.focusYear || d.focusYear,
-          coord: p.coord,
-          aliases,
-          titleZh: p.ancientZh,
-          subZh: `今${p.modernZh} · ${p.rangeZh}`,
-          titleEn: p.ancientEn,
-          subEn: `${p.modernEn} · ${p.rangeEn}`,
-          keywords: `${p.ancientZh} ${aliasStr} ${p.modernZh} ${p.rangeZh} ${p.ancientEn} ${p.modernEn} ${p.rangeEn} 名关 雄关 关隘 险关 pass`.toLowerCase(),
-        });
-      }
-
-      // 1c. Poetic & Historical Gazetteer (诗词名胜 · 古战场 · 关隘渡口)
-      for (const g of HistoricalAtlasController.PLACE_GAZETTEER) {
-        const aliases = (g.aliases || []).map((a) => a.toLowerCase());
-        const aliasSub = (g.aliases || []).slice(0, 3).join(' · ');
-        const asciiKeys = (g.asciiAliases || []).join(' ');
-        const nameEn = this._enDict(g.name);
-        const modEn = this._enModernCity(g.modern || '');
-        entries.push({
-          kind: 'gazetteer',
-          dynasty: null,
-          year: null,
-          coord: g.coord,
-          zoom: g.zoom || 2.5,
-          aliases,
-          titleZh: g.name,
-          subZh: `今${g.modern}${aliasSub ? ' · ' + aliasSub : ''}`,
-          titleEn: nameEn,
-          subEn: modEn ? `Now ${modEn}` : '',
-          keywords: `${g.name} ${aliases.join(' ')} ${asciiKeys} ${g.modern || ''} ${nameEn} ${modEn} 名胜 古迹 古战场`.toLowerCase(),
-        });
-      }
-
-      // 2. Prefectures & Macro Regions across snapshots
-      const seenAdmin = new Set();
-      for (const d of this.dynasties) {
-        const phaseList = d.phases && d.phases.length ? d.phases : [{ until: d.toYear, snap: `s_${d.key}` }];
-        phaseList.forEach((ph, idx) => {
-          const sy = idx === 0 ? d.fromYear : phaseList[idx - 1].until;
-          const midY = Math.round((sy + ph.until - 1) * 0.5);
-          const snap = this.snapshots[ph.snap];
-          if (!snap) return;
-          for (const [list, isPref] of [
-            [snap.regions, false],
-            [snap.prefectures, true],
-          ]) {
-            for (const item of list || []) {
-              if (!item.title || !item.anchor) continue;
-              const uid = `${d.key}:${item.title}`;
-              if (seenAdmin.has(uid)) continue;
-              seenAdmin.add(uid);
-              const itemEn = this._enDict(item.title);
-              entries.push({
-                kind: isPref ? 'prefecture' : 'region',
-                dynasty: d,
-                year: midY,
-                coord: item.anchor,
-                prefTitle: isPref ? item.title : null,
-                titleZh: item.title,
-                subZh: item.category && !item.title.endsWith(item.category) ? item.category : '',
-                titleEn: itemEn,
-                subEn: '',
-                keywords: `${item.title} ${itemEn} ${d.title}`.toLowerCase(),
-              });
-            }
-          }
-        });
-      }
-
-      // 3. Historical Milestones / Events
-      const eventEntries = [];
-      for (const d of this.dynasties) {
-        for (const m of d.milestones || []) {
-          const enHead = this._enMilestoneHeadline(d, m);
-          const siteEn = m.site ? this._enMilestoneSite(d, m) : '';
-          const yrEn = m.year <= 0 ? `${-m.year || 1} BCE` : `${m.year} CE`;
-          const evEntry = {
-            kind: 'event',
-            dynasty: d,
-            year: this._clampYearToDynasty(d, m.year),
-            rawYear: m.year,
-            milestone: m,
-            coord: m.coord,
-            titleZh: m.headline,
-            subZh: `${m.year <= 0 ? '前' + -m.year : m.year}年${m.site ? ' · ' + m.site : ''}`,
-            titleEn: enHead,
-            subEn: `${yrEn}${siteEn ? ' · ' + siteEn : ''}`,
-            keywords: `${m.headline} ${m.site || ''} ${enHead} ${siteEn} ${m.year}`.toLowerCase(),
-          };
-          entries.push(evEntry);
-          eventEntries.push(evEntry);
-        }
-      }
-
-      // 3b. Curated Place Landmark Events (名胜史事 · 战役古迹)
-      const seenLm = new Set();
-      for (const lm of HistoricalAtlasController.PLACE_LANDMARK_EVENTS) {
-        if (!lm.zh) continue;
-        const uid = `${lm.year}:${lm.zh.slice(0, 16)}`;
-        if (seenLm.has(uid)) continue;
-        seenLm.add(uid);
-        const lmKeywords = `${lm.zh} ${lm.site || ''} ${lm.en || ''} ${lm.siteEn || ''} ${lm.year}`.toLowerCase();
-        const existingEv = eventEntries.find(
-          (ev) =>
-            ev.rawYear === lm.year &&
-            ev.coord &&
-            lm.coord &&
-            this.projector.greatCircleKm(ev.coord, lm.coord) <= 65
-        );
-        if (existingEv) {
-          existingEv.keywords += ` ${lmKeywords}`;
-          if (!existingEv.altTitlesZh) existingEv.altTitlesZh = [];
-          existingEv.altTitlesZh.push(lm.zh);
-          if (lm.en) {
-            if (!existingEv.altTitlesEn) existingEv.altTitlesEn = [];
-            existingEv.altTitlesEn.push(lm.en);
-          }
-          continue;
-        }
-        const d =
-          this.dynasties.find((dyn) => dyn.key === lm.dynastyKey) ||
-          this.dynasties[this._findDynastyIndex(lm.year)] ||
-          this.dynasties[0];
-        const yrEn = lm.year <= 0 ? `${-lm.year || 1} BCE` : `${lm.year} CE`;
-        const milestoneObj = {
-          year: lm.year,
-          headline: lm.zh,
-          headlineEn: lm.en,
-          site: lm.site,
-          siteEn: lm.siteEn,
-          coord: lm.coord,
-        };
-        const lmEntry = {
-          kind: 'event',
-          dynasty: d,
-          year: this._clampYearToDynasty(d, lm.year),
-          rawYear: lm.year,
-          milestone: milestoneObj,
-          coord: lm.coord,
-          titleZh: lm.zh,
-          subZh: `${lm.year <= 0 ? '前' + -lm.year : lm.year}年${lm.site ? ' · ' + lm.site : ''}`,
-          titleEn: lm.en || lm.zh,
-          subEn: `${yrEn}${lm.siteEn ? ' · ' + lm.siteEn : ''}`,
-          keywords: `${lmKeywords} 史事 事件 战役 名胜`,
-        };
-        entries.push(lmEntry);
-        eventEntries.push(lmEntry);
-      }
-
-      const foldIdx = (s) =>
-        String(s || '')
-          .toLowerCase()
-          .replace(/['’‘`\-_.\s]+/g, '');
-      for (const item of entries) {
-        const tZh = item.titleZh.toLowerCase();
-        const tEn = item.titleEn.toLowerCase();
-        const bareZh = this._stripPromptParenthetical(item.titleZh).toLowerCase();
-        const bareEn = this._stripPromptParenthetical(item.titleEn).toLowerCase();
-        const mZh = (item.modernZh || '').toLowerCase();
-        const mZhParts = mZh ? mZh.split(/[·/、]/) : null;
-        const mEn = (item.modernEn || '').toLowerCase();
-        Object.defineProperty(item, '_q', {
-          value: {
-            tZh,
-            tEn,
-            bareZh,
-            bareEn,
-            mZh,
-            mZhParts,
-            mEn,
-            tEnFold: foldIdx(tEn),
-            mEnFold: mEn ? foldIdx(mEn) : '',
-            aliasesFold: item.aliases ? item.aliases.map(foldIdx) : null,
-            altZhPairs: item.altTitlesZh
-              ? item.altTitlesZh.map((raw) => [raw, raw.toLowerCase()])
-              : null,
-            altEnPairs: item.altTitlesEn
-              ? item.altTitlesEn.map((raw) => [raw, foldIdx(raw)])
-              : null,
-            keywordsFold: foldIdx(item.keywords),
-          },
-          enumerable: false,
-          configurable: true,
-        });
-      }
-
-      this.searchIndex = entries;
-      return entries;
-    }
-
-    _parseChineseNumber(str) {
-      if (!str) return null;
-      if (/^\d+$/.test(str)) return Number(str);
-      if (str === '元') return 1;
-      const map = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
-      if (str.length === 1) return map[str] || null;
-      if (str.startsWith('十')) return 10 + (map[str.slice(1)] || 0);
-      if (str.endsWith('十')) return (map[str[0]] || 0) * 10;
-      const parts = str.split('十');
-      if (parts.length === 2) {
-        return (map[parts[0]] || 0) * 10 + (map[parts[1]] || 0);
-      }
-      return null;
-    }
-
-    _getCompiledEraSpans() {
-      const enDynMap = (this.enLocale && this.enLocale.dynasties) || null;
-      if (
-        this._compiledEraSpans &&
-        this._compiledEraSpansDynRef === this.dynasties &&
-        this._compiledEraSpansEnRef === enDynMap
-      ) {
-        return this._compiledEraSpans;
-      }
-      const spans = HistoricalAtlasController.CHINESE_ERA_SPANS;
-      // [span, lastYear] for the reference track and every regional track, so regimes
-      // like Northern Wei (太和十八年) are searchable alongside the reference eras.
-      const rawEraSpans = [
-        ...spans.map((sp, idx) => [sp, idx + 1 < spans.length ? spans[idx + 1][0] - 1 : 1948]),
-        ...HistoricalAtlasController.REGIONAL_ERA_TRACKS.flatMap((t) =>
-          t.spans.map((sp, idx) => [sp, idx + 1 < t.spans.length ? t.spans[idx + 1][0] - 1 : t.until])
-        ),
-      ];
-      const compiled = rawEraSpans.map(([sp, endY]) => {
-        const [startY, prefix, baseNum = 1, monarchZh = '', monarchEn = ''] = sp;
-        const shortMonarch = monarchZh
-          .replace(/^(?:西|东|北|南|南朝|武周)/, '')
-          .replace(/^汉高帝$/, '汉高祖');
-        const dynPfx = ERA_DYNASTY_PREFIXES.find((dp) => prefix.startsWith(dp)) || '';
-        const eraOnly = dynPfx ? prefix.slice(dynPfx.length) : prefix;
-        const fullCombo = monarchZh ? `${monarchZh}${eraOnly}` : prefix;
-        const shortCombo = shortMonarch ? `${shortMonarch}${eraOnly}` : prefix;
-        const monarchEnLower = (monarchEn || '').toLowerCase();
-        const monarchEnExpanded = monarchEnLower.replace(/\bemp\./g, 'emperor');
-        const monarchBare = monarchEnExpanded.replace(/^emperor\s+/, '');
-        const dForSpan = this.dynasties[this._findDynastyIndex(startY)] || this.dynasties[0];
-        const enDynObj = (enDynMap && enDynMap[dForSpan.key]) || {};
-        const enDynShort = (enDynObj.short || enDynObj.name || dForSpan.key || '').toLowerCase();
-        const enDynBase = enDynShort.replace(/^[wens]\.\s*/, '');
-        const enSearchTarget = `${monarchEnLower} ${monarchEnExpanded} ${monarchEnExpanded} of ${enDynShort} ${monarchEnExpanded} of ${enDynBase} ${monarchBare} of ${enDynBase}`;
-        const monarchPfx =
-          ERA_DYNASTY_PREFIXES.find((dp) => monarchZh.startsWith(dp)) || dynPfx;
-        const monarchTitleLen =
-          monarchPfx && monarchZh.startsWith(monarchPfx)
-            ? monarchZh.length - monarchPfx.length
-            : monarchZh.length;
-        const [enName, enOwnRegime = ''] = monarchEnExpanded.split(' of ');
-        const enRegimePool = `${enOwnRegime} | ${enDynShort} | ${enDynBase}`;
-        const eraPinyinLower =
-          startY >= -140 && eraOnly ? this._eraNamePinyin(eraOnly).toLowerCase() : '';
-        const eraPinyinFold = eraPinyinLower.replace(/'/g, '');
-        return {
-          sp,
-          endY,
-          startY,
-          prefix,
-          baseNum,
-          monarchZh,
-          shortMonarch,
-          eraOnly,
-          fullCombo,
-          shortCombo,
-          monarchEnLower,
-          monarchEnExpanded,
-          enSearchTarget,
-          monarchTitleLen,
-          enName,
-          enRegimePool,
-          eraPinyinLower,
-          eraPinyinFold,
-        };
-      });
-      this._compiledEraSpans = compiled;
-      this._compiledEraSpansDynRef = this.dynasties;
-      this._compiledEraSpansEnRef = enDynMap;
-      return compiled;
-    }
-
-    _matchEraResults(rawQuery) {
-      const rawTrim = rawQuery.trim();
-      if (!rawTrim) return [];
-      const trimmed = /[\u4e00-\u9fff]/.test(rawTrim) ? this._toHans(rawTrim) : rawTrim;
-      const hits = [];
-
-      // Direct Gregorian year match (e.g. "1083", "公元1083年", "前214年", "-214", "221 BCE", "741 CE")
-      const directYrMatch = trimmed.match(/^(?:公元)?(前|-)?\s*(\d{1,4})\s*(?:年|bce|bc|ce|ad)?$/i);
-      if (directYrMatch) {
-        const isBce = Boolean(directYrMatch[1]) || /bce|bc/i.test(trimmed);
-        let yr = Number(directYrMatch[2]) * (isBce ? -1 : 1);
-        if (yr === 0) yr = 1;
-        if (yr >= this.minYear && yr <= this.maxYear) {
-          const dIdx = this._findDynastyIndex(yr);
-          const d = this.dynasties[dIdx];
-          const prevLoc = this.locale;
-          this.locale = 'zh';
-          const eraZh = this.formatEraLabel(yr, d);
-          const yrZh = this.formatYear(yr);
-          this.locale = 'en';
-          const yrEn = this.formatYear(yr);
-          const eraEn = this.formatEraLabel(yr, d);
-          this.locale = prevLoc;
-          hits.push({
-            kind: 'era',
-            dynasty: d,
-            year: yr,
-            titleZh: `${yrZh} · ${eraZh}`,
-            subZh: d.title,
-            titleEn: `${yrEn} (${eraEn})`,
-            subEn: (this.enLocale.dynasties[d.key] && this.enLocale.dynasties[d.key].name) || d.title,
-            score: 135,
-          });
-        }
-      }
-
-      const isYuanNian = /[元][年载]$/.test(trimmed);
-      const q = trimmed.replace(/[年载]$/, '');
-      if (!q) return hits;
-      const numMatch = isYuanNian
-        ? [q, q.slice(0, -1), '元']
-        : q.match(/^(.*?)([一二三四五六七八九十]+|\d+)$/);
-      const prefixQ = (numMatch ? numMatch[1] : q).replace(/[·\s]/g, '');
-      if (!prefixQ) return hits;
-      const qLower = trimmed.toLowerCase();
-      const isLatinQuery = qLower.length >= 3 && /[a-z]/i.test(qLower);
-      const qFoldEra = isLatinQuery ? qLower.replace(/['’‘`\-_.\s]+/g, '') : '';
-      const yearNum = numMatch ? this._parseChineseNumber(numMatch[2]) : null;
-      if (
-        !directYrMatch &&
-        yearNum === null &&
-        !isYuanNian &&
-        !/[年载]$/.test(trimmed) &&
-        prefixQ.length < 2
-      ) {
-        return hits;
-      }
-      const seenMonarchOnly = new Set();
-      const seenEraHit = new Set();
-      // A hit must reach past the regime name into the era or monarch title, so a bare
-      // regime ('北魏', '金', 'liao') does not list every era or emperor of that regime.
-      const reachesTail = (s, tailLen) => {
-        const at = s.lastIndexOf(prefixQ);
-        return at >= 0 && at + prefixQ.length > s.length - tailLen;
-      };
-
-      for (const c of this._getCompiledEraSpans()) {
-        const {
-          sp,
-          endY,
-          startY,
-          prefix,
-          baseNum,
-          monarchZh,
-          shortMonarch,
-          eraOnly,
-          fullCombo,
-          shortCombo,
-          monarchEnLower,
-          monarchEnExpanded,
-          enSearchTarget,
-          monarchTitleLen,
-          enName,
-          enRegimePool,
-          eraPinyinLower,
-          eraPinyinFold,
-        } = c;
-        const enRegimeOnly =
-          isLatinQuery && !enName.includes(qLower) && enRegimePool.includes(qLower);
-        const matchEraPinyin =
-          isLatinQuery &&
-          eraPinyinFold.length >= 4 &&
-          (qLower === eraPinyinLower || qFoldEra === eraPinyinFold);
-        const matchEra =
-          reachesTail(prefix, eraOnly.length) ||
-          reachesTail(fullCombo, eraOnly.length) ||
-          reachesTail(shortCombo, eraOnly.length) ||
-          matchEraPinyin;
-        const matchMonarchOnly =
-          !matchEra &&
-          yearNum === null &&
-          ((monarchZh &&
-            (reachesTail(monarchZh, monarchTitleLen) ||
-              reachesTail(shortMonarch, monarchTitleLen) ||
-              (prefixQ === '汉高祖' && prefix === '汉高帝'))) ||
-            (isLatinQuery && !enRegimeOnly && enSearchTarget.includes(qLower)));
-
-        if (matchEra || matchMonarchOnly) {
-          const monarchDedupKey = monarchZh || monarchEnLower;
-          if (matchMonarchOnly) {
-            if (seenMonarchOnly.has(monarchDedupKey)) continue;
-            seenMonarchOnly.add(monarchDedupKey);
-          } else if (
-            yearNum === null &&
-            monarchZh &&
-            (prefixQ === monarchZh || prefixQ === shortMonarch)
-          ) {
-            if (seenMonarchOnly.has(monarchDedupKey)) continue;
-            seenMonarchOnly.add(monarchDedupKey);
-          }
-          const targetNum = yearNum !== null ? yearNum : baseNum;
-          const targetY = startY + (targetNum - baseNum);
-          if (targetY >= startY && targetY <= endY + 5) {
-            const dIdx = this._findDynastyIndex(targetY);
-            const d = this.dynasties[dIdx];
-            const label = this._formatSpanEraZh(sp, targetNum);
-            // Regional tracks repeat some reference spans (e.g. Chen); list each era-year once.
-            if (seenEraHit.has(`${targetY}|${label}`)) continue;
-            seenEraHit.add(`${targetY}|${label}`);
-            const titleZh =
-              startY >= 1368 && startY < 1912 && monarchZh
-                ? `${label} · ${monarchZh}`
-                : label;
-            const yrZh = targetY <= 0 ? `公元前${-targetY}年` : `公元 ${targetY} 年`;
-            const yrEn = targetY <= 0 ? `${-targetY} BCE` : `${targetY} CE`;
-            const labelEn = this._formatSpanEraEn(sp, targetNum);
-            const isExplicitEraOrMonarch =
-              yearNum !== null ||
-              isYuanNian ||
-              /[年载]$/.test(trimmed) ||
-              prefix === prefixQ ||
-              fullCombo === prefixQ ||
-              shortCombo === prefixQ ||
-              monarchZh === prefixQ ||
-              shortMonarch === prefixQ ||
-              (prefixQ === '汉高祖' && prefix === '汉高帝') ||
-              (isLatinQuery &&
-                (monarchEnLower.startsWith(qLower) || monarchEnExpanded.startsWith(qLower)));
-            const isBareEraExact =
-              !isExplicitEraOrMonarch &&
-              (eraOnly === prefixQ ||
-                matchEraPinyin ||
-                prefix.endsWith(prefixQ) ||
-                fullCombo.endsWith(prefixQ) ||
-                shortCombo.endsWith(prefixQ));
-            hits.push({
-              kind: 'era',
-              dynasty: d,
-              year: targetY,
-              titleZh,
-              subZh: yrZh,
-              titleEn: `${labelEn} (${yrEn})`,
-              subEn: (this.enLocale.dynasties[d.key] && this.enLocale.dynasties[d.key].name) || d.title,
-              score: isExplicitEraOrMonarch ? 122 : isBareEraExact ? 94 : 88,
-            });
-          }
-        }
-      }
-      return hits;
-    }
-
-    _searchBucket(item) {
-      if (item.kind === 'dynasty' || item.kind === 'polity') return 'regime';
-      if (item.kind === 'multi_person' || item.kind === 'person' || item.kind === 'era') {
-        return 'person_era';
-      }
-      if (
-        item.kind === 'city' ||
-        item.kind === 'pass' ||
-        item.kind === 'gazetteer' ||
-        item.kind === 'prefecture' ||
-        item.kind === 'region'
-      ) {
-        return 'geo';
-      }
-      return 'event';
-    }
-
-    _queryQuickSearch(rawQuery) {
-      const rawTrim = rawQuery.trim();
-      if (!rawTrim) return [];
-      const normQ = /[\u4e00-\u9fff]/.test(rawTrim) ? this._toHans(rawTrim) : rawTrim;
-      const q = normQ.toLowerCase();
-      if (!q) return [];
-      const fold = (s) =>
-        String(s || '')
-          .toLowerCase()
-          .replace(/['’‘`\-_.\s]+/g, '');
-      const isAscii = /[a-z]/i.test(q) && !/[\u4e00-\u9fa5]/.test(q);
-      const qFold = isAscii ? fold(q) : '';
-      const index = this._ensureSearchIndex();
-      const eraResults = this._matchEraResults(normQ);
-      const hasEraMatch = eraResults.length > 0;
-      const results = [...eraResults];
-
-      for (const item of index) {
-        let score = 0;
-        let matchedAltZh = null;
-        let matchedAltEn = null;
-        let matchedByKeywordOnly = false;
-        const iq = item._q;
-        const tZh = iq ? iq.tZh : item.titleZh.toLowerCase();
-        const tEn = iq ? iq.tEn : item.titleEn.toLowerCase();
-        const bareZh = iq ? iq.bareZh : this._stripPromptParenthetical(item.titleZh).toLowerCase();
-        const bareEn = iq ? iq.bareEn : this._stripPromptParenthetical(item.titleEn).toLowerCase();
-        const mZh = iq ? iq.mZh : (item.modernZh || '').toLowerCase();
-        const mEn = iq ? iq.mEn : (item.modernEn || '').toLowerCase();
-        const tEnFold = isAscii ? (iq ? iq.tEnFold : fold(tEn)) : '';
-        const mEnFold = isAscii ? (iq ? iq.mEnFold : fold(mEn)) : '';
-        if (tZh === q || tEn === q) {
-          score = item.kind === 'dynasty' ? 108 : item.kind === 'polity' ? 104 : 100;
-        } else if (bareZh && (bareZh === q || bareEn === q)) {
-          score = item.kind === 'dynasty' ? 106 : item.kind === 'polity' ? 101 : 99;
-        } else if (isAscii && qFold.length >= 3 && tEnFold === qFold) {
-          score = 98;
-        } else if (
-          mZh &&
-          (mZh === q ||
-            (iq ? iq.mZhParts && iq.mZhParts.includes(q) : mZh.split(/[·/、]/).includes(q)) ||
-            mEn === q)
-        ) {
-          score = 96;
-        } else if (isAscii && qFold.length >= 3 && mEnFold === qFold) {
-          score = 94;
-        } else if (item.exactPolityTitles && item.exactPolityTitles.includes(q)) {
-          score = 100;
-        } else if (item.coreRegimes && item.coreRegimes.includes(q)) {
-          score = item.kind === 'dynasty' ? 105 : 97;
-        } else if (
-          item.aliases &&
-          item.aliases.some(
-            (a, idx) =>
-              a === q ||
-              (isAscii &&
-                qFold.length >= 3 &&
-                (iq && iq.aliasesFold ? iq.aliasesFold[idx] : fold(a)) === qFold)
-          )
-        ) {
-          score = item.kind === 'dynasty' ? 103 : item.kind === 'polity' ? 95 : 92;
-        } else if (
-          tZh.startsWith(q) ||
-          tEn.startsWith(q) ||
-          (isAscii && qFold.length >= 3 && tEnFold.startsWith(qFold))
-        ) {
-          if (item.kind === 'event') {
-            score = q.length === 1 ? 66 : hasEraMatch ? 78 : 88;
-          } else if (item.kind === 'dynasty' || item.kind === 'polity') {
-            score = 88;
-          } else if (
-            (item.kind === 'prefecture' || item.kind === 'region') &&
-            tZh.length === q.length + 1 &&
-            /[州郡国府路道省县]$/.test(tZh)
-          ) {
-            score = 84;
-          } else {
-            score = 80;
-          }
-        } else if (
-          item.kind === 'event' &&
-          q.length >= 2 &&
-          (tZh.includes(q) || (isAscii && qFold.length >= 4 && tEnFold.includes(qFold)))
-        ) {
-          score = 78;
-        } else if (
-          item.kind === 'event' &&
-          q.length >= 2 &&
-          ((item.altTitlesZh &&
-            (matchedAltZh = iq && iq.altZhPairs
-              ? (iq.altZhPairs.find((pair) => pair[1].includes(q)) || [])[0] || null
-              : item.altTitlesZh.find((at) => at.toLowerCase().includes(q)))) ||
-            (isAscii &&
-              qFold.length >= 4 &&
-              item.altTitlesEn &&
-              (matchedAltEn = iq && iq.altEnPairs
-                ? (iq.altEnPairs.find((pair) => pair[1].includes(qFold)) || [])[0] || null
-                : item.altTitlesEn.find((at) => fold(at).includes(qFold)))))
-        ) {
-          score = 74;
-        } else if (
-          mZh &&
-          (mZh.startsWith(q) ||
-            mEn.startsWith(q) ||
-            (isAscii && qFold.length >= 3 && mEnFold.startsWith(qFold)))
-        ) {
-          score = 78;
-        } else if (
-          item.keywords.includes(q) ||
-          (isAscii &&
-            qFold.length >= 4 &&
-            (iq ? iq.keywordsFold : fold(item.keywords)).includes(qFold))
-        ) {
-          if (
-            (hasEraMatch && (item.kind === 'city' || item.kind === 'event')) ||
-            (q.length === 1 && item.kind !== 'person')
-          ) {
-            score = 0;
-          } else {
-            score = item.kind === 'dynasty' ? 58 : 55;
-            matchedByKeywordOnly = true;
-          }
-        }
-
-        if (score > 0) {
-          let resItem = item;
-          if (item.kind === 'event' && (matchedAltZh || matchedAltEn)) {
-            resItem = {
-              ...item,
-              titleZh: matchedAltZh || item.titleZh,
-              titleEn: matchedAltEn || item.titleEn,
-            };
-          } else if (
-            item.kind === 'city' &&
-            matchedByKeywordOnly &&
-            item.remarkZh &&
-            !item.subZh.includes(item.remarkZh)
-          ) {
-            resItem = {
-              ...item,
-              subZh: item.subZh ? `${item.subZh} · ${item.remarkZh}` : item.remarkZh,
-              subEn:
-                item.subEn && item.remarkEn
-                  ? `${item.subEn} · ${item.remarkEn}`
-                  : item.subEn || item.remarkEn,
-            };
-          }
-          if (resItem.kind === 'person') {
-            if (score >= 92) score = 148;
-            else if (score >= 80) score = q.length === 1 || CORE_REGIME_CHARS.has(q) ? 86 : 114;
-            else score = 72;
-          } else if (resItem.kind === 'dynasty' || resItem.kind === 'polity') {
-            if (resItem.dynasty === this.dynasties[this.dynastyIdx]) score += 4;
-            if (resItem.politySpan >= 18) score += 1;
-          } else if (resItem.kind === 'event') {
-            if (resItem.dynasty === this.dynasties[this.dynastyIdx]) score += 4;
-          } else {
-            if (resItem.dynasty === this.dynasties[this.dynastyIdx]) score += 10;
-            if (resItem.isCapital) score += 2;
-          }
-          results.push({ ...resItem, score });
-        }
-      }
-
-      // Dynamic zero-config fallback if query matches a known monarch with >=2 historical events
-      if (
-        !results.some((r) => r.kind === 'person') &&
-        !results.some(
-          (r) =>
-            (r.kind === 'city' ||
-              r.kind === 'pass' ||
-              r.kind === 'gazetteer' ||
-              r.kind === 'dynasty' ||
-              r.kind === 'polity') &&
-            r.score >= 92
-        ) &&
-        /^[\u4e00-\u9fa5]{2,5}$/.test(normQ)
-      ) {
-        const adhoc = this._resolvePersonProfile(normQ);
-        if (adhoc && adhoc.isMonarch) {
-          const evs = this._collectPersonEvents(adhoc);
-          if (evs.length >= 2) {
-            const d = evs[0].dynasty || this.dynasties[0];
-            results.push({
-              kind: 'person',
-              personProfile: adhoc,
-              dynasty: d,
-              year: null,
-              titleZh: adhoc.zh,
-              subZh: `${adhoc.courtesyZh} · 共 ${evs.length} 处史事`,
-              titleEn: adhoc.en,
-              subEn: `${evs.length} events`,
-              score: 126,
-            });
-          }
-        }
-      }
-
-      const canBeMultiPerson =
-        /^[\u4e00-\u9fff·]{2,6}(?:\s+[\u4e00-\u9fff·]{2,6})+$/.test(normQ) ||
-        /[,，;；×+、&]|\s+(?:vs\.?|and|with)\s+/i.test(normQ);
-      const multiProfiles = canBeMultiPerson ? this._resolvePersonProfiles(normQ) : [];
-      if (multiProfiles.length >= 2) {
-        const st = this._buildPersonTracksAndEvents(multiProfiles);
-        if (st && st.isMulti) {
-          const d = st.events[0] ? st.events[0].dynasty : this.dynasties[0];
-          results.push({
-            kind: 'multi_person',
-            personProfiles: multiProfiles,
-            dynasty: d,
-            year: null,
-            titleZh: multiProfiles.map((p) => p.zh).join(' × '),
-            subZh:
-              st.sameTimeCount > 0
-                ? `共 ${st.events.length} 处行迹 · ${st.sameTimeCount} 处相逢`
-                : `并行行迹对照 · 共 ${st.events.length} 处行迹`,
-            titleEn: multiProfiles.map((p) => p.en).join(' × '),
-            subEn:
-              st.sameTimeCount > 0
-                ? `${st.events.length} stops · ${st.sameTimeCount} encounters`
-                : `${st.events.length} stops`,
-            score: 165,
-          });
-        }
-      }
-
-      results.sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        if (a.polityFrom !== undefined && b.polityFrom !== undefined) {
-          return a.polityFrom - b.polityFrom;
-        }
-        return 0;
-      });
-
-      const deduped = [];
-      const seenAdminTitle = new Map();
-      for (const item of results) {
-        if (item.kind === 'prefecture' || item.kind === 'region') {
-          const ak = item.titleZh;
-          if (seenAdminTitle.has(ak)) {
-            const prev = seenAdminTitle.get(ak);
-            if (item.dynasty && prev.dynasty && item.dynasty.title !== prev.dynasty.title) {
-              const dLabel = item.dynasty.badge || item.dynasty.title;
-              if (!prev._mergedDynasties.includes(dLabel)) prev._mergedDynasties.push(dLabel);
-            }
-            continue;
-          }
-          const copy = {
-            ...item,
-            _mergedDynasties: item.dynasty ? [item.dynasty.badge || item.dynasty.title] : [],
-          };
-          seenAdminTitle.set(ak, copy);
-          deduped.push(copy);
-          continue;
-        }
-        if (item.kind === 'city' && item.coord) {
-          const dupCity = deduped.some(
-            (prev) =>
-              prev.kind === 'city' &&
-              prev.titleZh === item.titleZh &&
-              prev.coord &&
-              this.projector.greatCircleKm(prev.coord, item.coord) <= 120
-          );
-          if (dupCity) continue;
-        } else if (item.kind === 'event') {
-          const evYr = item.rawYear !== undefined ? item.rawYear : item.year;
-          const dupEv = deduped.some(
-            (prev) =>
-              prev.kind === 'event' &&
-              (prev.rawYear !== undefined ? prev.rawYear : prev.year) === evYr &&
-              prev.coord &&
-              item.coord &&
-              this.projector.greatCircleKm(prev.coord, item.coord) <= 65
-          );
-          if (dupEv) continue;
-        }
-        deduped.push(item);
-      }
-
-      for (const item of deduped) {
-        if (item._mergedDynasties && item._mergedDynasties.length > 1 && !item.subZh) {
-          const dyns = item._mergedDynasties.slice(0, 4).join('、');
-          item.subZh = `历${dyns}`;
-        }
-        item.bucket = this._searchBucket(item);
-      }
-
-      if (!deduped.length) return [];
-
-      const buckets = {
-        regime: [],
-        person_era: [],
-        geo: [],
-        event: [],
-      };
-      for (const item of deduped) {
-        buckets[item.bucket].push(item);
-      }
-      const hasOtherBuckets =
-        buckets.regime.length + buckets.person_era.length + buckets.event.length > 0;
-      if (hasOtherBuckets && buckets.geo.length > 3) {
-        let adminCount = 0;
-        buckets.geo = buckets.geo.filter((g) => {
-          if (g.kind === 'prefecture' || g.kind === 'region') {
-            adminCount++;
-            return adminCount <= 2;
-          }
-          return true;
-        });
-      }
-
-      const topBucket = deduped[0].bucket;
-      const defaultOrder = ['regime', 'person_era', 'geo', 'event'];
-      const bucketOrder = [topBucket, ...defaultOrder.filter((b) => b !== topBucket)];
-
-      const baseQuotas = {
-        regime: buckets.regime[0] && buckets.regime[0].score < 70 ? 2 : 5,
-        person_era: 3,
-        geo: buckets.geo[0] && buckets.geo[0].score < 70 ? 2 : 3,
-        event: 2,
-      };
-      if (topBucket !== 'regime') {
-        baseQuotas[topBucket] = Math.max(baseQuotas[topBucket], 4);
-      }
-
-      const pickedByBucket = { regime: [], person_era: [], geo: [], event: [] };
-      const overflowByBucket = { regime: [], person_era: [], geo: [], event: [] };
-      let totalPicked = 0;
-
-      for (const b of bucketOrder) {
-        const list = buckets[b];
-        const qLimit = baseQuotas[b];
-        for (let i = 0; i < list.length; i++) {
-          if (i < qLimit && totalPicked < 12) {
-            pickedByBucket[b].push(list[i]);
-            totalPicked++;
-          } else {
-            overflowByBucket[b].push(list[i]);
-          }
-        }
-      }
-
-      if (totalPicked < 12) {
-        for (const minScore of [70, 0]) {
-          for (const b of bucketOrder) {
-            for (const item of overflowByBucket[b]) {
-              if (totalPicked >= 12) break;
-              if (item._picked || item.score < minScore) continue;
-              item._picked = true;
-              pickedByBucket[b].push(item);
-              totalPicked++;
-            }
-          }
-        }
-      }
-
-      const finalResults = [];
-      for (const b of bucketOrder) {
-        finalResults.push(...pickedByBucket[b]);
-      }
-      return finalResults.slice(0, 12);
-    }
-
-    _selectSearchResult(item) {
-      this.stopAutoplay();
-      this.clearCustomRoute();
-      this._clearQuickSearchInput();
-
-      if (item.kind === 'quiz') {
-        if (this.challenge) this.stopChallenge();
-        else this.startChallenge();
-        return;
-      }
-
-      if (item.kind === 'multi_person') {
-        this.openPersonChronicle(item.personProfiles, -1);
-        return;
-      }
-
-      if (item.kind === 'person') {
-        this.openPersonChronicle(item.personProfile || item.personKey || item.titleZh, -1);
-        return;
-      }
-
-      if (item.kind === 'polity') {
-        this.openPolityByKey(item.polityKey);
-        return;
-      }
-
-      if (item.year !== null && item.year !== undefined) {
-        this.jumpToYear(item.year);
-      }
-
-      if ((item.kind === 'city' || item.kind === 'pass' || item.kind === 'gazetteer') && item.coord) {
-        if (!this._id('chk-settlements').checked) {
-          this._id('chk-settlements').checked = true;
-          this.grpSettlements.classList.remove('is-hidden');
-        }
-        // Embeds keep the place/person card at the top right like desktop, not as a bottom sheet.
-        const isDesktop = typeof window === 'undefined' || window.innerWidth > 900 || Boolean(this.embed);
-        const minCityZoom = isDesktop ? 2.4 : 3.25;
-        const rawZoom = item.zoom || (item.kind === 'pass' ? 2.35 : item.tier === 2 ? 2.4 : 1.85);
-        const targetZoom =
-          item.kind === 'gazetteer' || item.tier === 2 ? Math.max(rawZoom, minCityZoom) : rawZoom;
-        const [tx, ty] = this.projector.toScreen(item.coord[0], item.coord[1]);
-        const w = Math.min(this.camera.w, 1000 / targetZoom);
-        const h = w * this._getViewportAspect();
-        const xFrac = isDesktop ? 0.38 : 0.5;
-        const yFrac = isDesktop ? 0.45 : 0.32;
-        this._animateCameraTo({ x: tx - w * xFrac, y: ty - h * yFrac, w, h });
-        this.openGenealogyAt(
-          item.coord[0],
-          item.coord[1],
-          item.kind === 'gazetteer' ? item.titleZh : undefined
-        );
-      } else if ((item.kind === 'prefecture' || item.kind === 'region') && item.coord) {
-        if (!this._id('chk-prefectures').checked) {
-          this._id('chk-prefectures').checked = true;
-          this.grpPrefectures.classList.remove('is-hidden');
-        }
-        if (this._materializeDeferredPrefectures()) {
-          this._rescaleSvgTypography();
-        }
-        const [tx, ty] = this.projector.toScreen(item.coord[0], item.coord[1]);
-        const w = Math.min(this.camera.w, 1000 / 1.95);
-        const h = w * this._getViewportAspect();
-        this._animateCameraTo({ x: tx - w * 0.5, y: ty - h * 0.48, w, h });
-        if (item.prefTitle) {
-          setTimeout(() => {
-            const el = this.grpPrefectures.querySelector(
-              `.prefecture-shape[data-pref-title="${CSS.escape(item.prefTitle)}"]`
-            );
-            this._setHoveredPrefecture(el);
-          }, 80);
-        }
-      } else if (item.kind === 'event' && item.milestone) {
-        this.openMilestoneBalloon(item.dynasty, item.milestone);
-        if (item.coord) this._panToward(item.coord[0], item.coord[1]);
-      }
-    }
+    // Global Quick Search methods are attached by js/atlas_search.js.
 
     _closeLayersPopover() {
       const layersPopover = this._id('layers-popover');
@@ -13636,6 +9434,7 @@
         const kindLabel = {
           multi_person: this.locale === 'en' ? 'Intersect' : '交汇',
           person: this.locale === 'en' ? 'Figure' : '人物',
+          story: this.locale === 'en' ? 'Storyline' : '始末',
           quiz: this.locale === 'en' ? 'Quiz' : '雅集',
           dynasty: this.locale === 'en' ? 'Dynasty' : '朝代',
           polity: this.locale === 'en' ? 'Regime' : '政权',
@@ -13771,13 +9570,38 @@
           searchList.appendChild(guideLi);
           searchList.classList.remove('is-hidden');
           if (this.locale === 'zh-tw') this._applyZhHantDom(searchList);
+          if (!this._isLoreDetailLoaded()) {
+            this._ensureLoreDetail();
+          }
+          if (!this._hasZhHant()) {
+            this._ensureZhHant();
+          }
           return;
         }
+        const pinyinQuery = this._eventPinyinQuery(q);
         if (/[a-z]/i.test(q) && !this._hasEnDict()) {
+          if (this._canMatchEventPinyin(pinyinQuery)) this._ensureEventPinyin();
           this._ensureEnglishLocale().then(renderSearchDropdown);
           return;
         }
         currentResults = this._queryQuickSearch(q);
+        const pendingSearchData = [];
+        if (!this._isLoreDetailLoaded()) pendingSearchData.push(this._ensureLoreDetail());
+        if (/[\u4e00-\u9fff]/.test(q) && !this._hasZhHant()) {
+          pendingSearchData.push(this._ensureZhHant());
+        }
+        if (!window.ATLAS_EVENT_PINYIN && this._canMatchEventPinyin(pinyinQuery, currentResults.length)) {
+          pendingSearchData.push(this._ensureEventPinyin());
+        }
+        if (pendingSearchData.length) {
+          const prevSig = currentResults.map((r) => `${r.kind}:${r.titleZh}:${r.subZh}`).join('|');
+          Promise.all(pendingSearchData).then(() => {
+            if (searchList.classList.contains('is-hidden') || searchInp.value.trim() !== q) return;
+            const nextResults = this._queryQuickSearch(q);
+            const nextSig = nextResults.map((r) => `${r.kind}:${r.titleZh}:${r.subZh}`).join('|');
+            if (nextSig !== prevSig) renderSearchDropdown();
+          });
+        }
         activeSearchIdx = currentResults.length ? 0 : -1;
         searchList.innerHTML = '';
         if (!currentResults.length) {
@@ -14116,6 +9940,20 @@
       if (playSpeedBtn) {
         playSpeedBtn.addEventListener('click', () => this.cyclePlaySpeed());
       }
+      const narratorBtn = this._id('act-narrator');
+      if (narratorBtn) {
+        narratorBtn.addEventListener('pointerenter', () => this._ensureNarrator());
+        narratorBtn.addEventListener('click', () => {
+          if (this.challenge) return;
+          if (this._isNarratorLoaded()) {
+            this.toggleNarrator();
+            return;
+          }
+          this._ensureNarrator().then((ok) => {
+            if (ok && typeof this.toggleNarrator === 'function') this.toggleNarrator();
+          });
+        });
+      }
 
       this._id('inp-year').addEventListener('change', (e) => this._commitYearInput(e.target));
       this._id('inp-year').addEventListener('blur', () => {
@@ -14142,6 +9980,7 @@
       // Scrubber dragging (smooth continuous scrubbing anywhere on the bar)
       const track = this._id('scrubber-track');
       this._bindScrubberDrag(track);
+      this._bindScrubberNavigator();
       // Touching the event callout ends autoplay, like any other input.
       this.milestoneBalloon.addEventListener('pointerdown', () => {
         if (this.playing) this.stopAutoplay();
@@ -14595,14 +10434,26 @@
           const pName = settlementEl.dataset.ancient;
           const pMod = settlementEl.dataset.modern;
           const pRange = settlementEl.dataset.remark;
-          const pChoke = settlementEl.dataset.chokepoint || '';
+          const passObj =
+            settlementEl.dataset.passKey &&
+            (HistoricalAtlasController.STRATEGIC_PASSES || []).find(
+              (p) => p.key === settlementEl.dataset.passKey
+            );
+          const pChoke =
+            settlementEl.dataset.chokepoint ||
+            (passObj
+              ? this.locale === 'en'
+                ? passObj.chokepointEn
+                : this._zh(passObj.chokepointZh || '')
+              : '') ||
+            '';
           const badge = this.locale === 'en' ? '[Strategic Pass]' : '【天下名关】';
           const traceHint =
             this.locale === 'en' ? 'Click to view pass history & battles ›' : '点击查看关隘形胜与历代战史 ›';
           const locStr = this.locale === 'en' ? ` (Now ${pMod})` : `（今${pMod}）`;
           this._showHoverTip(
             e,
-            `<b>${badge} ${pName}${locStr}</b><div class="tt-sub">${pRange} · ${pChoke}</div><div class="tt-sub">${traceHint}</div>`
+            `<b>${badge} ${pName}${locStr}</b><div class="tt-sub">${pRange}${pChoke ? ' · ' + pChoke : ''}</div><div class="tt-sub">${traceHint}</div>`
           );
         } else if (settlementEl || coCity) {
           const isModernDyn = Boolean(cur && (cur.key === 'roc' || cur.key === 'prc'));
@@ -15015,1828 +10866,7 @@
       this.hoverTip.style.top = `${top}px`;
     }
 
-    // ---------------- AI-Native Public API (resolvePlace / inspect / locate) ----------------
-    _parsePlaceList(place) {
-      if (!place || typeof place !== 'string') return [];
-      return place
-        .split(/\s*(?:,|，|、|→|->)\s*/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-    }
-
-    _parseYearList(year) {
-      if (year === undefined || year === null || year === '') return [];
-      const raw = Array.isArray(year) ? year.join(',') : String(year);
-      return raw
-        .split(/[,，、;\s]+/)
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((s) => Number(s))
-        .filter((n) => !Number.isNaN(n))
-        .map((n) => {
-          const clamped = Math.max(this.minYear, Math.min(this.maxYear, Math.round(n)));
-          return clamped === 0 ? 1 : clamped;
-        });
-    }
-
-    _parsePlaceTokens(place, year) {
-      if (!place || typeof place !== 'string') return [];
-      const rawTracks = place
-        .split(/\s*[;；]\s*/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      if (!rawTracks.length) return [];
-      const yearList = this._parseYearList(year);
-      const defaultYear = yearList.length ? yearList[0] : this.year;
-      const isPerTrackYear =
-        rawTracks.length > 1 && yearList.length === rawTracks.length;
-      const out = [];
-      let globalIdx = 0;
-      rawTracks.forEach((trackStr, tIdx) => {
-        const rawTokens = this._parsePlaceList(trackStr);
-        rawTokens.forEach((tok, sIdx) => {
-          let stopYear = isPerTrackYear
-            ? yearList[tIdx]
-            : yearList.length
-              ? yearList[Math.min(globalIdx, yearList.length - 1)]
-              : defaultYear;
-          let stopPlace = tok;
-          const m1 = tok.match(/^(-?\d{1,4})\s*[:：]\s*(.+)$/);
-          const m2 = !m1 ? tok.match(/^(.+?)\s*[:：]\s*(-?\d{1,4})$/) : null;
-          if (m1) {
-            const y = Math.max(this.minYear, Math.min(this.maxYear, Math.round(Number(m1[1]))));
-            stopYear = y === 0 ? 1 : y;
-            stopPlace = m1[2].trim();
-          } else if (m2) {
-            const y = Math.max(this.minYear, Math.min(this.maxYear, Math.round(Number(m2[2]))));
-            stopYear = y === 0 ? 1 : y;
-            stopPlace = m2[1].trim();
-          }
-          out.push({
-            place: stopPlace,
-            year: stopYear,
-            trackIdx: tIdx,
-            trackStepIdx: sIdx,
-            trackStepNum: sIdx + 1,
-          });
-          globalIdx++;
-        });
-      });
-      return out;
-    }
-
-    resolvePlace(place, year = this.year) {
-      if (!place || typeof place !== 'string') return null;
-      const rawInput = place.trim();
-      if (!rawInput) return null;
-      const yr =
-        year !== null && year !== '' && Number.isFinite(Number(year)) ? Number(year) : this.year;
-      const targetDynIdx = this._findDynastyIndex(yr);
-      const targetDyn = this.dynasties[targetDynIdx] || this.dynasties[0];
-      const targetSnapKey = this._resolveSnapKey(targetDyn, yr);
-      if (!this._resolvePlaceCache || this._resolvePlaceCacheSnapRef !== this.snapshots) {
-        this._resolvePlaceCache = new Map();
-        this._resolvePlaceCacheSnapRef = this.snapshots;
-      }
-      const snapFull = this.snapshots && this.snapshots.s_prc ? 1 : 0;
-      const hasEn = this._hasEnDict() ? 1 : 0;
-      const cacheKey = `${rawInput}\0${targetDyn ? targetDyn.key : ''}\0${targetSnapKey}\0${snapFull}\0${hasEn}`;
-      if (this._resolvePlaceCache.has(cacheKey)) {
-        const cached = this._resolvePlaceCache.get(cacheKey);
-        return cached ? { ...cached } : null;
-      }
-      const res = this._resolvePlaceUncached(rawInput, yr, targetDyn, targetSnapKey);
-      if (this._resolvePlaceCache.size > 4096) this._resolvePlaceCache.clear();
-      this._resolvePlaceCache.set(cacheKey, res ? { ...res } : null);
-      return res ? { ...res } : null;
-    }
-
-    _resolvePlaceUncached(rawInput, yr, targetDyn, targetSnapKey) {
-      const rawHans = /[\u4e00-\u9fff]/.test(rawInput) ? this._toHans(rawInput) : rawInput;
-      const raw = rawHans === '海南藏族自治州' ? '海南州' : rawHans;
-
-      const normApos = (s) =>
-        String(s || '')
-          .toLowerCase()
-          .replace(/[’‘`]/g, "'")
-          .replace(/\s+/g, ' ')
-          .trim();
-      const normSpace = (s) =>
-        String(s || '')
-          .toLowerCase()
-          .replace(/['’‘`\-_.]+/g, '')
-          .replace(/\s+/g, ' ')
-          .trim();
-      const foldAscii = (s) =>
-        String(s || '')
-          .toLowerCase()
-          .replace(/['’‘`\-_.\s]+/g, '');
-      const stripParens = (s) =>
-        String(s || '')
-          .replace(/（.*?）|\(.*?\)/g, '')
-          .trim();
-      const extractParens = (s) => {
-        const out = [];
-        const re = /[（(]([^）)]+)[）)]/g;
-        let m;
-        while ((m = re.exec(String(s || ''))) !== null) {
-          if (m[1] && m[1].trim()) out.push(m[1].trim().toLowerCase());
-        }
-        return out;
-      };
-
-      const q = raw.toLowerCase();
-      const qApos = normApos(q);
-      const hasQueryParens = /[（(]/.test(raw);
-      const isAsciiQuery = /[a-z]/i.test(raw) && !/[\u4e00-\u9fa5]/.test(raw);
-      const isPassSuffix = /(?:关|\s+(?:pass|guan))$/i.test(raw);
-      const stripped = raw
-        .replace(
-          /(?:省|市|州|郡|府|道|路|县|国|关|城|盟|地区|(?:[一-龥]{1,6}族)*自治州|壮族自治区|回族自治区|维吾尔自治区|自治区|特别行政区)$/,
-          ''
-        )
-        .replace(
-          /\s+(?:province|prefecture|commandery|circuit|pass|city|county|region|autonomous\s+region|municipality|sar|fu|zhou|jun|lu|dao|xian|guan)$/i,
-          ''
-        )
-        .trim();
-      const qStripped = stripped.length >= 2 ? stripped.toLowerCase() : q;
-      const qNorm = isAsciiQuery ? normSpace(q) : q;
-      const qStrippedNorm = isAsciiQuery ? normSpace(qStripped) : qStripped;
-      const qFold = isAsciiQuery ? foldAscii(q) : '';
-      const qStrippedFold = isAsciiQuery ? foldAscii(qStripped) : '';
-
-      const orderedDynasties = [
-        targetDyn,
-        ...this.dynasties.filter((d) => d !== targetDyn),
-      ];
-
-      const passModes = isAsciiQuery
-        ? ['strict', 'folded', 'substring']
-        : ['strict', 'substring'];
-
-      // Pass 1A ('strict': apostrophe-preserving) -> Pass 1B ('folded': space/apostrophe-insensitive) -> Pass 2 ('substring')
-      for (const mode of passModes) {
-        const isExact = mode !== 'substring';
-        const isFolded = mode === 'folded';
-
-        // 1. Strategic passes (名关雄隘)
-        for (const allowStrip of isExact ? [false, true] : [true]) {
-          for (const p of HistoricalAtlasController.STRATEGIC_PASSES) {
-            const cleanZh = stripParens(p.ancientZh || '');
-            const cleanEn = stripParens(p.ancientEn || '');
-            const bareZh = cleanZh.replace(/关$/, '').trim();
-            const bareKey = (p.key || '').replace(/guan$/, '').trim();
-            const names = [
-              p.ancientZh,
-              allowStrip && !hasQueryParens ? cleanZh : '',
-              allowStrip && bareZh.length >= 2 ? bareZh : '',
-              ...(allowStrip ? extractParens(p.ancientZh) : []),
-              ...(p.aliases || []),
-              ...((p.eraNames || []).flatMap((en) => [en.zh, en.en])),
-              p.ancientEn,
-              allowStrip && !hasQueryParens ? cleanEn : '',
-              ...(allowStrip ? extractParens(p.ancientEn) : []),
-              p.key,
-              bareKey.length >= 3 ? `${bareKey} pass` : '',
-            ]
-              .filter(Boolean)
-              .map((s) => s.toLowerCase());
-
-            const matched =
-              mode === 'strict'
-                ? names.some(
-                    (n) =>
-                      n === q ||
-                      (allowStrip && isPassSuffix && n === qStripped) ||
-                      (isAsciiQuery &&
-                        (normApos(n) === qApos ||
-                          (allowStrip &&
-                            isPassSuffix &&
-                            normApos(n) === normApos(qStripped))))
-                  )
-                : isFolded
-                  ? names.some(
-                      (n) =>
-                        qFold.length >= 3 &&
-                        (foldAscii(n) === qFold ||
-                          (allowStrip &&
-                            isPassSuffix &&
-                            qStrippedFold.length >= 3 &&
-                            foldAscii(n) === qStrippedFold))
-                    )
-                  : names.some(
-                      (n) =>
-                        n.includes(q) ||
-                        (q.length >= 2 && q.includes(n)) ||
-                        (isAsciiQuery &&
-                          qFold.length >= 4 &&
-                          (foldAscii(n).includes(qFold) ||
-                            (foldAscii(n).length >= 4 && qFold.includes(foldAscii(n)))))
-                    );
-            if (matched) {
-              return {
-                kind: 'pass',
-                name: p.ancientZh,
-                modern: p.modernZh || '',
-                lng: p.coord[0],
-                lat: p.coord[1],
-                coord: p.coord,
-                zoom: 2.6,
-              };
-            }
-          }
-        }
-
-        const matchSettlement = (s, allowStrip = true) => {
-          const anc = (s.ancient || '').toLowerCase();
-          const mod = (s.modern || '').toLowerCase();
-          const cleanAnc = stripParens(anc);
-          const zhAliases = allowStrip
-            ? (s.aliases || []).map((a) => String(a || '').toLowerCase()).filter(Boolean)
-            : [];
-          let hit = false;
-          if (!isAsciiQuery) {
-            hit = !allowStrip
-              ? anc === q || mod === q
-              : isExact
-                ? anc === q ||
-                  (!hasQueryParens && cleanAnc === q) ||
-                  mod === q ||
-                  (!hasQueryParens && cleanAnc === qStripped) ||
-                  mod === qStripped ||
-                  zhAliases.some(
-                    (a) =>
-                      a === q ||
-                      (!hasQueryParens && stripParens(a) === q) ||
-                      (!hasQueryParens && stripParens(a) === qStripped)
-                  )
-                : anc.includes(q) ||
-                  mod.includes(q) ||
-                  zhAliases.some((a) => a.includes(q)) ||
-                  (!hasQueryParens &&
-                    qStripped.length >= 2 &&
-                    (anc.includes(qStripped) ||
-                      mod.includes(qStripped) ||
-                      zhAliases.some((a) => a.includes(qStripped))));
-          } else {
-            const ancEnRaw = this._enDict(s.ancient || '').toLowerCase();
-            const cleanAncEn = stripParens(ancEnRaw);
-            const ancParens = extractParens(ancEnRaw);
-            const aliasEnCands = allowStrip
-              ? (s.aliases || []).flatMap((a) => {
-                  const tr = this._enDict(a || '').toLowerCase();
-                  if (!tr || /[\u4e00-\u9fa5]/.test(tr)) return [];
-                  return [
-                    tr,
-                    !hasQueryParens ? stripParens(tr) : '',
-                    ...(!hasQueryParens && mode !== 'strict' ? extractParens(tr) : []),
-                  ];
-                })
-              : [];
-            const modEnRaw = this._enModernCity(s.modern || '').toLowerCase();
-            const cleanModEn = stripParens(modEnRaw);
-            const modCityPart = cleanModEn.split(',')[0].trim();
-            const candidates = !allowStrip
-              ? [
-                  ancEnRaw,
-                  cleanModEn,
-                  !hasQueryParens ? modCityPart : '',
-                ].filter(Boolean)
-              : mode === 'strict'
-                ? [
-                    ancEnRaw,
-                    !hasQueryParens ? cleanAncEn : '',
-                    ...aliasEnCands,
-                    cleanModEn,
-                    !hasQueryParens ? modCityPart : '',
-                  ].filter(Boolean)
-                : [
-                    ancEnRaw,
-                    !hasQueryParens ? cleanAncEn : '',
-                    ...(!hasQueryParens ? ancParens : []),
-                    ...aliasEnCands,
-                    cleanModEn,
-                    !hasQueryParens ? modCityPart : '',
-                  ].filter(Boolean);
-            if (mode === 'strict') {
-              const qStrippedApos = normApos(qStripped);
-              hit = candidates.some(
-                (c) =>
-                  normApos(c) === qApos ||
-                  (allowStrip &&
-                    !hasQueryParens &&
-                    qStrippedApos.length >= 2 &&
-                    normApos(c) === qStrippedApos)
-              );
-            } else if (isFolded) {
-              hit =
-                qFold.length >= 2 &&
-                candidates.some(
-                  (c) =>
-                    normSpace(c) === qNorm ||
-                    foldAscii(c) === qFold ||
-                    (allowStrip &&
-                      !hasQueryParens &&
-                      qStrippedFold.length >= 2 &&
-                      (normSpace(c) === qStrippedNorm || foldAscii(c) === qStrippedFold))
-                );
-            } else {
-              hit = candidates.some(
-                (c) =>
-                  c.includes(q) ||
-                  (!hasQueryParens && qStripped.length >= 3 && c.includes(qStripped)) ||
-                  (qFold.length >= 4 && foldAscii(c).includes(qFold))
-              );
-            }
-          }
-          if (!hit) return null;
-          return {
-            kind: 'city',
-            name: this._settlementAncient(s, yr),
-            modern: s.modern || '',
-            lng: s.coord[0],
-            lat: s.coord[1],
-            coord: s.coord,
-            zoom: s.tier === 2 ? 2.6 : 2.3,
-          };
-        };
-
-        // 2a. Target dynasty settlements first (preserves era-specific homonyms like 战国/西汉 江州=重庆)
-        for (const allowStrip of isExact ? [false, true] : [true]) {
-          for (const s of targetDyn.settlements || []) {
-            const res = matchSettlement(s, allowStrip);
-            if (res) return res;
-          }
-        }
-
-        // 2b. On exact pass, check Poetic & Historical Gazetteer before out-of-era settlements
-        // so Tang/Song 江州 (江西九江) is not hijacked by Warring States 江州（巴）(重庆)
-        const matchGazetteer = () => {
-          for (const g of HistoricalAtlasController.PLACE_GAZETTEER) {
-            const rawList = [g.name, ...(g.aliases || [])].filter(Boolean);
-            const zhNames = rawList.map((s) => s.toLowerCase());
-            let matched = false;
-            if (!isAsciiQuery) {
-              matched = isExact
-                ? zhNames.some(
-                    (n) =>
-                      n === q ||
-                      (!hasQueryParens && stripParens(n) === q) ||
-                      (!hasQueryParens && stripParens(n) === qStripped)
-                  )
-                : zhNames.some(
-                    (n) =>
-                      n.includes(q) ||
-                      (!hasQueryParens && qStripped.length >= 2 && n.includes(qStripped))
-                  );
-            } else {
-              const enNames = [];
-              for (const rawItem of rawList) {
-                const tr = this._enDict(rawItem).toLowerCase();
-                if (tr && !/[\u4e00-\u9fa5]/.test(tr)) {
-                  enNames.push(
-                    tr,
-                    !hasQueryParens ? stripParens(tr) : '',
-                    ...(!hasQueryParens && mode !== 'strict' ? extractParens(tr) : [])
-                  );
-                }
-              }
-              const allEn = [...enNames, ...(g.asciiAliases || [])].filter(Boolean);
-              if (mode === 'strict') {
-                const qStrippedApos = normApos(qStripped);
-                matched = allEn.some(
-                  (n) =>
-                    normApos(n) === qApos ||
-                    (!hasQueryParens && qStrippedApos.length >= 3 && normApos(n) === qStrippedApos)
-                );
-              } else if (isFolded) {
-                matched =
-                  qFold.length >= 3 &&
-                  allEn.some(
-                    (n) =>
-                      normSpace(n) === qNorm ||
-                      foldAscii(n) === qFold ||
-                      (!hasQueryParens &&
-                        qStrippedFold.length >= 3 &&
-                        (normSpace(n) === qStrippedNorm || foldAscii(n) === qStrippedFold))
-                  );
-              } else {
-                matched = allEn.some(
-                  (n) =>
-                    n.includes(q) ||
-                    (!hasQueryParens && qStripped.length >= 3 && n.includes(qStripped)) ||
-                    (qFold.length >= 4 && foldAscii(n).includes(qFold))
-                );
-              }
-            }
-            if (matched) {
-              return {
-                kind: 'gazetteer',
-                name: g.name,
-                modern: g.modern || '',
-                lng: g.coord[0],
-                lat: g.coord[1],
-                coord: g.coord,
-                zoom: g.zoom || 2.6,
-              };
-            }
-          }
-          return null;
-        };
-
-        if (isExact) {
-          const gazHit = matchGazetteer();
-          if (gazHit) return gazHit;
-        }
-
-        // 2c. Remaining dynasties' settlements
-        for (const allowStrip of isExact ? [false, true] : [true]) {
-          for (const d of orderedDynasties.slice(1)) {
-            for (const s of d.settlements || []) {
-              const res = matchSettlement(s, allowStrip);
-              if (res) return res;
-            }
-          }
-        }
-
-        // 3. Poetic & Historical Gazetteer (substring pass)
-        if (!isExact) {
-          const gazHit = matchGazetteer();
-          if (gazHit) return gazHit;
-        }
-      }
-
-      // 3. Curated Historical Journey stops
-      for (const j of HistoricalAtlasController.HISTORICAL_JOURNEYS) {
-        for (const st of j.stops || []) {
-          const anc = (st.ancientZh || '').toLowerCase();
-          const mod = (st.modernZh || '').toLowerCase();
-          const stAliases = (st.aliases || []).map((a) => String(a || '').toLowerCase());
-          const ancEn = (st.ancientEn || '').toLowerCase();
-          const modEn = (st.modernEn || '').toLowerCase();
-          const zhHit =
-            anc === q ||
-            mod === q ||
-            stAliases.includes(q) ||
-            anc.includes(q) ||
-            mod.includes(q) ||
-            stAliases.some((a) => a.includes(q));
-          const enHit =
-            isAsciiQuery &&
-            (ancEn === q ||
-              modEn === q ||
-              foldAscii(ancEn) === qFold ||
-              foldAscii(stripParens(ancEn)) === qFold ||
-              ancEn.includes(q) ||
-              modEn.includes(q));
-          if (zhHit || enHit) {
-            return {
-              kind: 'journey_stop',
-              name: st.ancientZh,
-              modern: st.modernZh || '',
-              lng: st.coord[0],
-              lat: st.coord[1],
-              coord: st.coord,
-              zoom: 2.5,
-            };
-          }
-        }
-      }
-
-      // 4. Milestones & Landmark Events (exact site match first so compound sites do not hijack single sites)
-      for (const exactSite of [true, false]) {
-        for (const d of orderedDynasties) {
-          for (const m of d.milestones || []) {
-            if (!m.coord) continue;
-            const site = (m.site || '').toLowerCase();
-            const head = (m.headline || '').toLowerCase();
-            const enPair =
-              this.enLocale &&
-              this.enLocale.milestones &&
-              this.enLocale.milestones[`${d.key}:${m.year}`];
-            const headEn = (
-              m.headlineEn ||
-              (Array.isArray(enPair) ? enPair[0] : enPair) ||
-              ''
-            ).toLowerCase();
-            const siteEn = (
-              m.siteEn ||
-              (Array.isArray(enPair) ? enPair[1] : '') ||
-              (m.site ? this._enDict(m.site) : '')
-            ).toLowerCase();
-            const zhHit = exactSite
-              ? Boolean(site && (site === q || stripParens(site) === q))
-              : (site && (site.includes(q) || q.includes(site))) || head.includes(q);
-            const enHit =
-              isAsciiQuery &&
-              (exactSite
-                ? Boolean(siteEn && (siteEn === q || foldAscii(siteEn) === qFold))
-                : (siteEn &&
-                    (siteEn.includes(q) ||
-                      (qFold.length >= 4 && foldAscii(siteEn).includes(qFold)))) ||
-                  (headEn && headEn.includes(q)));
-            if (zhHit || enHit) {
-              return {
-                kind: 'event_site',
-                name: m.site || raw,
-                modern: '',
-                lng: m.coord[0],
-                lat: m.coord[1],
-                coord: m.coord,
-                zoom: 2.5,
-              };
-            }
-          }
-        }
-        for (const lm of HistoricalAtlasController.PLACE_LANDMARK_EVENTS) {
-          if (!lm.coord) continue;
-          const site = (lm.site || '').toLowerCase();
-          const zh = (lm.zh || '').toLowerCase();
-          const siteEn = (lm.siteEn || '').toLowerCase();
-          const en = (lm.en || '').toLowerCase();
-          const zhHit = exactSite
-            ? Boolean(site && (site === q || stripParens(site) === q))
-            : (site && (site.includes(q) || q.includes(site))) || zh.includes(q);
-          const enHit =
-            isAsciiQuery &&
-            (exactSite
-              ? Boolean(siteEn && (siteEn === q || foldAscii(siteEn) === qFold))
-              : (siteEn &&
-                  (siteEn.includes(q) ||
-                    (qFold.length >= 4 && foldAscii(siteEn).includes(qFold)))) ||
-                (en && en.includes(q)));
-          if (zhHit || enHit) {
-            return {
-              kind: 'event_site',
-              name: lm.site || raw,
-              modern: '',
-              lng: lm.coord[0],
-              lat: lm.coord[1],
-              coord: lm.coord,
-              zoom: 2.5,
-            };
-          }
-        }
-      }
-
-      // 5. Prefectures & Macro Regions across snapshots (preferring target dynasty snapshot)
-      const allSnapKeys = [
-        targetSnapKey,
-        ...Object.keys(this.snapshots).filter((k) => k !== 'neighbors' && k !== targetSnapKey),
-      ];
-      for (const exact of [true, false]) {
-        for (const sk of allSnapKeys) {
-          const snap = this.snapshots[sk];
-          if (!snap) continue;
-          for (const item of [...(snap.prefectures || []), ...(snap.regions || [])]) {
-            if (!item.title || !item.anchor) continue;
-            const t = item.title.toLowerCase();
-            const tEn = isAsciiQuery ? this._enDict(item.title).toLowerCase() : '';
-            const tEnStripped = tEn
-              .replace(
-                /\s+(?:province|prefecture|commandery|circuit|region|protectorate|fu|zhou|jun|dao|lu)$/i,
-                ''
-              )
-              .trim();
-            const isPref = (snap.prefectures || []).includes(item);
-            const zhMatch = exact
-              ? t === q || t === qStripped
-              : t.includes(q) || t.includes(qStripped);
-            const enMatch =
-              isAsciiQuery &&
-              tEn &&
-              (exact
-                ? tEn === q ||
-                  tEnStripped === qStripped ||
-                  foldAscii(tEn) === qFold ||
-                  (qStrippedFold.length >= 3 && foldAscii(tEnStripped) === qStrippedFold)
-                : tEn.includes(q) ||
-                  (qFold.length >= 4 && foldAscii(tEn).includes(qFold)));
-            if (zhMatch || enMatch) {
-              return {
-                kind: isPref ? 'prefecture' : 'region',
-                name: item.title,
-                modern: '',
-                lng: item.anchor[0],
-                lat: item.anchor[1],
-                coord: item.anchor,
-                zoom: isPref ? 2.4 : 2.0,
-              };
-            }
-          }
-        }
-      }
-
-      // 6. Modern Provinces
-      for (const prov of this.provinces || []) {
-        if (!prov.hub || String(prov.code).includes('_JD')) continue;
-        const pt = prov.title.toLowerCase();
-        const ptShort = prov.title
-          .replace(/(?:省|市|壮族自治区|回族自治区|维吾尔自治区|自治区|特别行政区)$/, '')
-          .toLowerCase();
-        const ptEn = isAsciiQuery
-          ? (this._enDict(prov.title) || this._enDict(ptShort) || '').toLowerCase()
-          : '';
-        const zhMatch = pt === q || pt.includes(q) || pt.includes(qStripped);
-        const enMatch =
-          isAsciiQuery &&
-          ptEn &&
-          (ptEn === q ||
-            ptEn === qStripped ||
-            foldAscii(ptEn) === qFold ||
-            foldAscii(ptEn) === qStrippedFold ||
-            ptEn.includes(qStripped));
-        if (zhMatch || enMatch) {
-          return {
-            kind: 'province',
-            name: prov.title,
-            modern: prov.title,
-            lng: prov.hub[0],
-            lat: prov.hub[1],
-            coord: prov.hub,
-            zoom: 2.0,
-          };
-        }
-      }
-
-      // Fallback syntax like "古名(今名)" or "古名/今名" if full string did not match
-      if (/[（()/]/.test(raw)) {
-        const subParts = raw
-          .split(/[（()/）]/)
-          .map((s) => s.trim())
-          .filter(Boolean);
-        if (subParts.length > 1) {
-          for (const sp of subParts) {
-            const hit = this.resolvePlace(sp, yr);
-            if (hit) return hit;
-          }
-        }
-      }
-
-      return null;
-    }
-
-    _inspectCoord(cLng, cLat, d, snap, year = this.year) {
-      const isEn = this.locale === 'en';
-      const eraHit = this._resolveEraPlaceAt(cLng, cLat, d, snap);
-      const modernProvince = eraHit.modernLoc.inModernChina
-        ? isEn
-          ? this.trTerm(eraHit.modernLoc.modernTitle)
-          : this._zh(eraHit.modernLoc.modernTitle)
-        : null;
-      const rawNearAncient =
-        eraHit.near && eraHit.near.s ? this._settlementAncient(eraHit.near.s, year) : '';
-      const isCapAtYear =
-        eraHit.near && eraHit.near.s ? this._isSettlementCapital(eraHit.near.s, year) : false;
-      const nearestCity = eraHit.near
-        ? {
-            ancient: isEn ? this.trTerm(rawNearAncient) : this._zh(rawNearAncient),
-            modern: isEn
-              ? this.trModernCity(eraHit.near.s.modern || '')
-              : this._zh(eraHit.near.s.modern || ''),
-            distanceKm: Math.round(eraHit.near.km),
-            ...(isCapAtYear ? { isCapital: true } : {}),
-            ...(eraHit.near.s.remark
-              ? { remark: isEn ? this.trTerm(eraHit.near.s.remark) : this._zh(eraHit.near.s.remark) }
-              : {}),
-          }
-        : null;
-      const fmt = (item) => {
-        if (isEn) {
-          const isEmigre = item.category === '侨州' || item.category === '侨郡';
-          return this.trTerm(item.title) + (isEmigre ? ' (Emigre)' : '');
-        }
-        return this._zh(
-          item.title +
-            (item.category && !item.title.endsWith(item.category) ? `(${item.category})` : '')
-        );
-      };
-      const regions =
-        d && d.key === 'prc'
-          ? modernProvince
-            ? [modernProvince]
-            : []
-          : Array.from(new Set(eraHit.regionObjs.map(fmt)));
-      const rawProvTitle = eraHit.modernLoc.inModernChina ? eraHit.modernLoc.modernTitle : null;
-      const prefectures =
-        d && d.key === 'prc'
-          ? rawProvTitle &&
-            nearestCity &&
-            nearestCity.distanceKm <= 25 &&
-            rawNearAncient &&
-            !rawProvTitle.startsWith(rawNearAncient)
-            ? [nearestCity.ancient]
-            : []
-          : Array.from(new Set(eraHit.prefObjs.map(fmt)));
-      const closestOverall = this._findNearestSettlement(
-        this._getCanonicalPlaces(),
-        cLng,
-        cLat,
-        160
-      );
-      const matchedPassHit = this._findNearbyPass(cLng, cLat, 30);
-      const matchedPass =
-        matchedPassHit && !(closestOverall && closestOverall.km < matchedPassHit.km)
-          ? matchedPassHit.pass
-          : null;
-      const identityModern = this._resolveModernIdentity(
-        cLng,
-        cLat,
-        '',
-        eraHit.modernLoc.modernTitle,
-        closestOverall
-      );
-      const rawLore = this._resolvePlaceLoreBanner(cLng, cLat, matchedPass, identityModern, null);
-      const lore =
-        rawLore && this.locale === 'zh-tw'
-          ? {
-              ...rawLore,
-              badge: this._zh(rawLore.badge),
-              tag: this._zh(rawLore.tag),
-              desc: this._zh(rawLore.desc),
-            }
-          : rawLore;
-      return {
-        polity: eraHit.polity ? (isEn ? this.trTerm(eraHit.polity) : this._zh(eraHit.polity)) : null,
-        regions,
-        prefectures,
-        modernProvince,
-        nearestCity,
-        ...(lore ? { lore } : {}),
-      };
-    }
-
-    _drawCustomRouteOverlay(stops) {
-      if (!this.grpJourney || !Array.isArray(stops) || stops.length < 2) return null;
-      this.grpJourney.innerHTML = '';
-      const palette = HistoricalAtlasController.PERSON_TRACK_PALETTE;
-      const trackIds = Array.from(new Set(stops.map((s) => s.trackIdx || 0)));
-      const isMultiTrack = trackIds.length > 1;
-
-      if (isMultiTrack) {
-        for (let i = 0; i < stops.length; i++) {
-          delete stops[i].convergence;
-        }
-        for (let i = 0; i < stops.length; i++) {
-          for (let j = i + 1; j < stops.length; j++) {
-            if ((stops[i].trackIdx || 0) === (stops[j].trackIdx || 0)) continue;
-            const km = this.projector.greatCircleKm(stops[i].coord, stops[j].coord);
-            if (km <= 45) {
-              const colorI = palette[(stops[i].trackIdx || 0) % palette.length];
-              const colorJ = palette[(stops[j].trackIdx || 0) % palette.length];
-              stops[i].convergence = { peerIdx: j, peerColor: colorJ, km };
-              stops[j].convergence = { peerIdx: i, peerColor: colorI, km };
-            }
-          }
-        }
-      }
-
-      for (let tPos = 0; tPos < trackIds.length; tPos++) {
-        const tId = trackIds[tPos];
-        const routeColor = isMultiTrack ? palette[tPos % palette.length] : '#9e2a2b';
-        const segments = [];
-        for (let i = 0; i < stops.length - 1; i++) {
-          if ((stops[i].trackIdx || 0) !== tId || (stops[i + 1].trackIdx || 0) !== tId) continue;
-          const segInfo = this._buildJourneySegmentInfo(stops[i].coord, stops[i + 1].coord);
-          if (segInfo) segments.push({ ...segInfo, toIdx: i + 1 });
-        }
-        const curStop = this.customRouteStopIdx >= 0 ? stops[this.customRouteStopIdx] : null;
-        const trCurIdx =
-          curStop && (curStop.trackIdx || 0) === tId ? this.customRouteStopIdx : -1;
-        this._renderCartographicTrajectory(segments, trCurIdx, routeColor);
-      }
-
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-      let prevSx = null;
-      let prevSy = null;
-      let prevBelow = false;
-
-      const isMultiYear = new Set(stops.map((s) => s.year)).size > 1;
-      const screenCoords = stops.map((st) => this.projector.toScreen(st.lng, st.lat));
-      stops.forEach((st, idx) => {
-        const [sx, sy] = screenCoords[idx];
-        if (sx < minX) minX = sx;
-        if (sx > maxX) maxX = sx;
-        if (sy < minY) minY = sy;
-        if (sy > maxY) maxY = sy;
-
-        const peerIdx = st.convergence ? st.convergence.peerIdx : undefined;
-        const isCoLocatedPeer =
-          isMultiTrack &&
-          peerIdx !== undefined &&
-          screenCoords[peerIdx] &&
-          Math.hypot(sx - screenCoords[peerIdx][0], sy - screenCoords[peerIdx][1]) < 18;
-        if (isCoLocatedPeer && idx > peerIdx) return;
-
-        const tPos = trackIds.indexOf(st.trackIdx || 0);
-        const routeColor = isMultiTrack ? palette[tPos % palette.length] : '#9e2a2b';
-        const isTrackEnd =
-          idx === 0 ||
-          idx === stops.length - 1 ||
-          (stops[idx - 1] && (stops[idx - 1].trackIdx || 0) !== (st.trackIdx || 0)) ||
-          (stops[idx + 1] && (stops[idx + 1].trackIdx || 0) !== (st.trackIdx || 0));
-        const isHighlighted =
-          this.customRouteStopIdx >= 0
-            ? idx === this.customRouteStopIdx || (isCoLocatedPeer && peerIdx === this.customRouteStopIdx)
-            : isTrackEnd || Boolean(st.convergence);
-        const convCls = isCoLocatedPeer ? ' is-intersect' : '';
-        const g = this._svgNode(
-          'g',
-          {
-            class: `journey-node ${isHighlighted ? 'is-current' : 'is-passed'}${convCls}`,
-            'data-x': sx.toFixed(1),
-            'data-y': sy.toFixed(1),
-            'data-stop-idx': String(idx),
-          },
-          this.grpJourney
-        );
-        g.style.color = routeColor;
-
-        if (isCoLocatedPeer) {
-          const peerStop = stops[peerIdx];
-          const c0 = routeColor;
-          const c1 = st.convergence.peerColor || '#1d5a7b';
-          const n0 = String(st.trackStepNum || idx + 1);
-          const n1 = String((peerStop && peerStop.trackStepNum) || peerIdx + 1);
-          if (isHighlighted) {
-            this._svgNode(
-              'rect',
-              {
-                class: 'jn-pulse jn-pulse-pill',
-                x: '-15.5',
-                y: '-10.5',
-                width: '31',
-                height: '21',
-                rx: '10.5',
-              },
-              g
-            );
-          }
-          this._svgNode(
-            'rect',
-            {
-              class: 'jn-meet-pill',
-              x: '-12.5',
-              y: '-7.6',
-              width: '25',
-              height: '15.2',
-              rx: '7.6',
-            },
-            g
-          );
-          this._svgNode('circle', { class: 'jn-meet-dot', cx: '-5.2', cy: '0', r: '5.5', fill: c0 }, g);
-          const t0 = this._svgNode('text', { class: 'jn-num', x: '-5.2', y: '0.5' }, g);
-          t0.textContent = n0;
-          this._svgNode('circle', { class: 'jn-meet-dot', cx: '5.2', cy: '0', r: '5.5', fill: c1 }, g);
-          const t1 = this._svgNode('text', { class: 'jn-num', x: '5.2', y: '0.5' }, g);
-          t1.textContent = n1;
-        } else {
-          if (isHighlighted) {
-            this._svgNode('circle', { class: 'jn-pulse', r: 11.2 }, g);
-          }
-          this._svgNode('circle', { class: 'jn-disc', r: isHighlighted ? 7.8 : 6.6 }, g);
-          const numTxt = this._svgNode('text', { class: 'jn-num', y: '0.5' }, g);
-          numTxt.textContent = String(isMultiTrack && st.trackStepNum ? st.trackStepNum : idx + 1);
-        }
-
-        let below = false;
-        let nearestDist = Infinity;
-        let nearestDy = 0;
-        for (let k = 0; k < stops.length; k++) {
-          if (k === idx || (isCoLocatedPeer && k === peerIdx)) continue;
-          const [ksx, ksy] = screenCoords[k];
-          const d = Math.hypot(sx - ksx, sy - ksy);
-          if (d < nearestDist) {
-            nearestDist = d;
-            nearestDy = sy - ksy;
-          }
-        }
-        if (nearestDist < 65) {
-          below = nearestDy >= 0;
-        } else if (prevSx !== null && Math.hypot(sx - prevSx, sy - prevSy) < 90) {
-          below = !prevBelow;
-        }
-        prevSx = sx;
-        prevSy = sy;
-        prevBelow = below;
-
-        const lblY = below ? '19.5' : isCoLocatedPeer ? '-11.8' : '-11';
-        const lblTxt = this._svgNode(
-          'text',
-          { class: `jn-label${isCoLocatedPeer ? ' is-intersect-label' : ''}`, x: '0', y: lblY },
-          g
-        );
-        const rawLbl = st.query || st.name;
-        const isEn = this.locale === 'en';
-        const baseLbl = isEn ? this.trTerm(rawLbl) : this._zh(rawLbl);
-        const yrTag =
-          st.year < 0 ? (isEn ? `${-st.year} BCE` : `前${-st.year}`) : `${st.year}`;
-        lblTxt.textContent =
-          isMultiYear && st.year !== undefined ? `${baseLbl} (${yrTag})` : baseLbl;
-      });
-      this._rescaleSvgTypography();
-      return { minX, minY, maxX, maxY };
-    }
-
-    _renderCustomRoute(stops, explicitZoom) {
-      if (!this.grpJourney || !Array.isArray(stops) || stops.length < 2) return;
-      if (this.challenge) this.stopChallenge(true);
-      if (this.mobileChronicleOpen && this._isMobileViewport()) {
-        this.toggleMobileChronicle(false);
-      }
-      this.closeMilestoneBalloon();
-      if (this.activeCustomRoute !== stops) {
-        this.closeGenealogyCard();
-        this.customRouteStopIdx = -1;
-      }
-      this.activeCustomRoute = stops;
-      if (this.svg && typeof this.svg.querySelectorAll === 'function') {
-        this.svg.querySelectorAll('.cap-breath-ring, .cap-hint-tag').forEach((el) => el.remove());
-      }
-
-      const bounds = this._drawCustomRouteOverlay(stops);
-      if (!bounds) return;
-      const { minX, minY, maxX, maxY } = bounds;
-
-      this._renderCustomRouteCard();
-      const cx = (minX + maxX) * 0.5;
-      const cy = (minY + maxY) * 0.5;
-      const aspect = this._getViewportAspect();
-      // Embeds keep the place/person card at the top right like desktop, not as a bottom sheet.
-      const isDesktop = typeof window === 'undefined' || window.innerWidth > 900 || Boolean(this.embed);
-      const hasZoom =
-        explicitZoom !== undefined &&
-        explicitZoom !== null &&
-        explicitZoom !== '' &&
-        !Number.isNaN(Number(explicitZoom));
-      if (!isDesktop) {
-        const visTopFrac = this._getCustomRouteVisibleTopFrac();
-        const topPadFrac = 0.06;
-        const botPadFrac = 0.05;
-        const availFrac = Math.max(0.32, visTopFrac - topPadFrac - botPadFrac);
-        const midFrac = topPadFrac + availFrac * 0.5;
-        const effAspect = Math.max(0.36, aspect * availFrac);
-        const spanW = Math.max(maxX - minX + 140, (maxY - minY + 96) / effAspect) * 1.14;
-        const w = hasZoom
-          ? 1000 / Math.max(1, Math.min(8, Number(explicitZoom)))
-          : Math.max(260, Math.min(1380, spanW));
-        const h = w * aspect;
-        this.camera = {
-          x: cx - w * 0.5,
-          y: cy - h * midFrac,
-          w,
-          h,
-          zoom: 1000 / w,
-        };
-        this._applyCamera(true);
-        return;
-      }
-      const spanW = Math.max(maxX - minX + 140, (maxY - minY + 130) / aspect) * 1.25;
-      const w = hasZoom
-        ? 1000 / Math.max(1, Math.min(8, Number(explicitZoom)))
-        : Math.max(260, Math.min(920, spanW));
-      const h = w * aspect;
-      const offsetY = h * 0.05;
-      this.camera = {
-        x: Math.max(-140, Math.min(1000 - w + 140, cx - w * 0.5)),
-        y: Math.max(-100, Math.min(700 - h + 120, cy - h * 0.5 + offsetY)),
-        w,
-        h,
-        zoom: 1000 / w,
-      };
-      this._applyCamera(true);
-    }
-
-    inspect({ year, place, lng, lat, zoom, person, stop } = {}) {
-      const isEn = this.locale === 'en';
-      const personProfiles = person ? this._resolvePersonProfiles(person) : [];
-      const personProfile = personProfiles[0] || null;
-      const multiState =
-        personProfiles.length >= 2 ? this._buildPersonTracksAndEvents(personProfiles) : null;
-      const personEvents = multiState
-        ? multiState.events
-        : personProfile
-          ? this._collectPersonEvents(personProfile)
-          : [];
-      const stopIdx =
-        stop !== undefined && stop !== null && stop !== '' && !Number.isNaN(Number(stop))
-          ? Number(stop)
-          : -1;
-      const activePersonEv =
-        personEvents.length > 0
-          ? stopIdx >= 0 && stopIdx < personEvents.length
-            ? personEvents[stopIdx]
-            : (multiState && personEvents.find((e) => e.isSharedEncounter)) || personEvents[0]
-          : null;
-      const personPayload =
-        multiState && personEvents.length > 0
-          ? {
-              key: multiState.profiles.map((p) => p.key).join(','),
-              zh: multiState.profiles.map((p) => this._zh(p.zh)).join(' × '),
-              en: multiState.profiles.map((p) => p.en).join(' × '),
-              isMulti: true,
-              profiles: multiState.profiles.map((p) => ({
-                key: p.key,
-                zh: this._zh(p.zh),
-                en: p.en,
-                span: p.span,
-              })),
-              stop: stopIdx,
-              totalEvents: personEvents.length,
-              sameTimeCount: multiState.sameTimeCount,
-              encounters: multiState.intersectPlaces.map((ev) => ({
-                index: ev.globalIdx,
-                year: ev.year,
-                dynasty: isEn ? this.dynastyName(ev.dynasty) : this._zh(ev.dynasty.title),
-                site: isEn ? ev.siteEn || this.trTerm(ev.siteZh) : this._zh(ev.siteZh),
-                modern: isEn
-                  ? ev.modernEn || this.trModernCity(ev.modernZh || '')
-                  : this._zh(ev.modernZh || ''),
-                coord: ev.coord,
-                participants: (ev.participants || []).map((pt) =>
-                  isEn ? pt.personEn : this._zh(pt.personZh)
-                ),
-                text:
-                  Array.isArray(ev.distinctNotes) && ev.distinctNotes.length > 1
-                    ? ev.distinctNotes.map((pt) => ({
-                        person: isEn ? pt.personEn : this._zh(pt.personZh),
-                        text: isEn ? pt.textEn : this._zh(pt.textZh),
-                      }))
-                    : isEn
-                      ? ev.textEn
-                      : this._zh(ev.textZh),
-              })),
-              events: personEvents.map((ev, i) => ({
-                index: i,
-                year: ev.year,
-                dynasty: isEn ? this.dynastyName(ev.dynasty) : this._zh(ev.dynasty.title),
-                site: isEn ? ev.siteEn || this.trTerm(ev.siteZh) : this._zh(ev.siteZh),
-                modern: isEn
-                  ? ev.modernEn || this.trModernCity(ev.modernZh || '')
-                  : this._zh(ev.modernZh || ''),
-                coord: ev.coord,
-                isSharedEncounter: Boolean(ev.isSharedEncounter),
-                person: ev.isSharedEncounter
-                  ? (ev.participants || [])
-                      .map((pt) => (isEn ? pt.personEn : this._zh(pt.personZh)))
-                      .join(' × ')
-                  : isEn
-                    ? ev.personEn
-                    : this._zh(ev.personZh),
-                text: isEn ? ev.textEn : this._zh(ev.textZh),
-                ...(ev.quoteZh || ev.quoteEn
-                  ? { quote: isEn ? ev.quoteEn || ev.quoteZh : this._zh(ev.quoteZh || ev.quoteEn) }
-                  : {}),
-              })),
-            }
-          : personProfile && personEvents.length > 0
-            ? {
-                key: personProfile.key,
-                zh: this._zh(personProfile.zh),
-                en: personProfile.en,
-                courtesyZh: this._zh(personProfile.courtesyZh || ''),
-                courtesyEn: personProfile.courtesyEn || '',
-                span: personProfile.span,
-                stop: stopIdx,
-                totalEvents: personEvents.length,
-                events: personEvents.map((ev, i) => ({
-                  index: i,
-                  year: ev.year,
-                  dynasty: isEn ? this.dynastyName(ev.dynasty) : this._zh(ev.dynasty.title),
-                  site: isEn ? ev.siteEn || this.trTerm(ev.siteZh) : this._zh(ev.siteZh),
-                  modern: isEn
-                    ? ev.modernEn || this.trModernCity(ev.modernZh || '')
-                    : this._zh(ev.modernZh || ''),
-                  coord: ev.coord,
-                  text: isEn ? ev.textEn : this._zh(ev.textZh),
-                  ...(ev.quoteZh || ev.quoteEn
-                    ? { quote: isEn ? ev.quoteEn || ev.quoteZh : this._zh(ev.quoteZh || ev.quoteEn) }
-                    : {}),
-                })),
-              }
-            : null;
-
-      const yearList = this._parseYearList(year);
-      const yr = yearList.length
-        ? yearList[0]
-        : activePersonEv
-          ? this._clampYearToDynasty(activePersonEv.dynasty, activePersonEv.year)
-          : this.year;
-      const dIdx = this._findDynastyIndex(yr);
-      const d = this.dynasties[dIdx] || this.dynasties[0];
-      const snapKey = this._resolveSnapKey(d, yr);
-      const snap = this.snapshots[snapKey] || { polities: [], regions: [], prefectures: [] };
-
-      const placeTokens = this._parsePlaceTokens(place, year);
-      if (placeTokens.length >= 2) {
-        const route = [];
-        let totalKm = 0;
-        const isMultiTrack = placeTokens.some((t) => (t.trackIdx || 0) > 0);
-        const trackCounters = {};
-        for (let i = 0; i < placeTokens.length; i++) {
-          const tok = placeTokens[i];
-          const r = this.resolvePlace(tok.place, tok.year);
-          if (!r) continue;
-          const sdIdx = this._findDynastyIndex(tok.year);
-          const sd = this.dynasties[sdIdx] || d;
-          const sSnapKey = this._resolveSnapKey(sd, tok.year);
-          const sSnap = this.snapshots[sSnapKey] || snap;
-          const info = this._inspectCoord(r.lng, r.lat, sd, sSnap, tok.year);
-          const prev = route.length ? route[route.length - 1] : null;
-          const tId = tok.trackIdx || 0;
-          const prevTrackId = prev && prev.trackIdx !== undefined ? prev.trackIdx : 0;
-          const segKm =
-            prev && prevTrackId === tId
-              ? Math.round(this.projector.greatCircleKm(prev.coord, [r.lng, r.lat]))
-              : 0;
-          totalKm += segKm;
-          trackCounters[tId] = (trackCounters[tId] || 0) + 1;
-          const cleanPlace = /[<>]/.test(String(tok.place || '')) ? r.name : tok.place;
-          route.push({
-            step: route.length + 1,
-            ...(isMultiTrack ? { trackIdx: tId, trackStep: trackCounters[tId] } : {}),
-            year: tok.year,
-            era: this.formatEraLabel(tok.year, sd, [r.lng, r.lat]),
-            dynasty: isEn ? this.dynastyName(sd) : this._zh(sd.title),
-            place: cleanPlace,
-            resolvedName: isEn ? this.trTerm(r.name) : this._zh(r.name),
-            modern: isEn ? this.trModernCity(r.modern || '') : this._zh(r.modern || ''),
-            coord: [Number(r.lng.toFixed(4)), Number(r.lat.toFixed(4))],
-            distanceFromPrevKm: segKm,
-            ...info,
-          });
-        }
-        if (route.length >= 2) {
-          const first = route[0];
-          const isMultiYear = new Set(route.map((s) => s.year)).size > 1;
-          const formattedPlace = isMultiTrack
-            ? Object.values(
-                route.reduce((acc, s) => {
-                  const k = s.trackIdx || 0;
-                  if (!acc[k]) acc[k] = [];
-                  acc[k].push(s.place);
-                  return acc;
-                }, {})
-              )
-                .map((arr) => arr.join(','))
-                .join(';')
-            : route.map((s) => s.place).join(',');
-          const params = new URLSearchParams();
-          params.set('year', isMultiYear ? route.map((s) => s.year).join(',') : String(first.year));
-          params.set('place', formattedPlace);
-          if (isEn) params.set('lang', 'en');
-          else if (this.locale === 'zh-tw') params.set('lang', 'zh-tw');
-          const basePath =
-            typeof location !== 'undefined' ? `${location.origin}${location.pathname}` : '';
-          return {
-            year: first.year,
-            years: route.map((s) => s.year),
-            era: this.formatEraLabel(first.year, d, first.coord),
-            dynasty: {
-              key: d.key,
-              title: isEn ? this.dynastyName(d) : this._zh(d.title),
-              seat: isEn ? this.dynastySeat(d) : this._zh(d.seat),
-              span: [d.fromYear, d.toYear],
-            },
-            place: formattedPlace,
-            coord: first.coord,
-            zoom: Number(this.camera.zoom.toFixed(2)),
-            polity: first.polity,
-            regions: first.regions,
-            prefectures: first.prefectures,
-            modernProvince: first.modernProvince,
-            nearestCity: first.nearestCity,
-            lore: first.lore,
-            route,
-            routeDistanceKm: totalKm,
-            url: `${basePath}?${params.toString()}`,
-          };
-        }
-      }
-
-      const singlePlace = placeTokens.length === 1 ? placeTokens[0].place : place;
-      const singleYear = placeTokens.length === 1 ? placeTokens[0].year : yr;
-      const hasExplicitCoord =
-        lng !== undefined &&
-        lat !== undefined &&
-        lng !== '' &&
-        lat !== '' &&
-        !Number.isNaN(Number(lng)) &&
-        !Number.isNaN(Number(lat));
-      const resolved = !hasExplicitCoord && singlePlace ? this.resolvePlace(singlePlace, singleYear) : null;
-      const cLng = hasExplicitCoord
-        ? Number(lng)
-        : resolved
-          ? resolved.lng
-          : activePersonEv && activePersonEv.coord
-            ? activePersonEv.coord[0]
-            : null;
-      const cLat = hasExplicitCoord
-        ? Number(lat)
-        : resolved
-          ? resolved.lat
-          : activePersonEv && activePersonEv.coord
-            ? activePersonEv.coord[1]
-            : null;
-      const hasCoord = cLng !== null && cLat !== null;
-
-      const info = hasCoord
-        ? this._inspectCoord(cLng, cLat, d, snap, singleYear)
-        : {
-            polity: null,
-            regions: [],
-            prefectures: [],
-            modernProvince: null,
-            nearestCity: null,
-            lore: null,
-          };
-
-      const targetZoom = Math.max(
-        1,
-        Math.min(8, Number(zoom) || (resolved && resolved.zoom) || (hasCoord ? 2.5 : this.camera.zoom))
-      );
-      const rawPlaceStr = singlePlace ? String(singlePlace).trim() : '';
-      const placeLabel =
-        rawPlaceStr && !/[<>]/.test(rawPlaceStr)
-          ? rawPlaceStr
-          : resolved
-            ? resolved.name
-            : rawPlaceStr.replace(/[<>]/g, '').trim();
-      const params = new URLSearchParams();
-      if (year !== undefined && year !== null && year !== '') {
-        params.set('year', String(singleYear));
-      } else if (!personPayload) {
-        params.set('year', String(singleYear));
-      }
-      if (personPayload) {
-        params.set('person', personPayload.key);
-        if (stopIdx >= 0) params.set('stop', String(stopIdx));
-      }
-      if (placeLabel) params.set('place', placeLabel);
-      if (hasExplicitCoord) {
-        params.set('lng', Number(cLng).toFixed(2));
-        params.set('lat', Number(cLat).toFixed(2));
-      }
-      if (zoom !== undefined) {
-        params.set('zoom', Number(targetZoom.toFixed(2)));
-      }
-      if (isEn) params.set('lang', 'en');
-      else if (this.locale === 'zh-tw') params.set('lang', 'zh-tw');
-      const basePath =
-        typeof location !== 'undefined' ? `${location.origin}${location.pathname}` : '';
-
-      return {
-        year: singleYear,
-        era: this.formatEraLabel(singleYear, d, hasCoord ? [cLng, cLat] : null),
-        dynasty: {
-          key: d.key,
-          title: isEn ? this.dynastyName(d) : this._zh(d.title),
-          seat: isEn ? this.dynastySeat(d) : this._zh(d.seat),
-          span: [d.fromYear, d.toYear],
-        },
-        place: placeLabel || null,
-        resolvedName: resolved
-          ? isEn
-            ? this.trTerm(resolved.name)
-            : this._zh(resolved.name)
-          : activePersonEv
-            ? isEn
-              ? activePersonEv.siteEn || this.trTerm(activePersonEv.siteZh)
-              : this._zh(activePersonEv.siteZh)
-            : null,
-        modern: resolved
-          ? isEn
-            ? this.trModernCity(resolved.modern || '')
-            : this._zh(resolved.modern || '')
-          : activePersonEv
-            ? isEn
-              ? activePersonEv.modernEn || this.trModernCity(activePersonEv.modernZh || '')
-              : this._zh(activePersonEv.modernZh || '')
-            : null,
-        coord: hasCoord ? [Number(cLng.toFixed(4)), Number(cLat.toFixed(4))] : null,
-        zoom: Number(targetZoom.toFixed(2)),
-        ...info,
-        ...(personPayload ? { person: personPayload } : {}),
-        url: `${basePath}?${params.toString()}`,
-      };
-    }
-
-    locate(opts = {}) {
-      const { year, place, lng, lat, zoom } = opts || {};
-      const hasEnDict = this._hasEnDict();
-      const needsEnDict =
-        !hasEnDict && (this.locale === 'en' || (place && /[a-z]/i.test(String(place))));
-      if (!this._fullSnapshotsLoaded || needsEnDict) {
-        Promise.all([
-          this._fullSnapshotsLoaded ? Promise.resolve() : this._ensureFullSnapshots(),
-          needsEnDict ? this._ensureEnglishLocale() : Promise.resolve(),
-        ]).then(() => {
-          this.locate(opts);
-        });
-      }
-      this.stopAutoplay();
-      const placeTokens = this._parsePlaceTokens(place, year);
-      const yearList = this._parseYearList(year);
-      const initialYear = placeTokens.length
-        ? placeTokens[0].year
-        : yearList.length
-          ? yearList[0]
-          : undefined;
-      if (initialYear !== undefined) {
-        this.jumpToYear(initialYear);
-      }
-
-      if (placeTokens.length >= 2) {
-        const stops = placeTokens
-          .map((tok) => {
-            const r = this.resolvePlace(tok.place, tok.year);
-            if (!r) return null;
-            const cleanQuery = /[<>]/.test(String(tok.place || '')) ? r.name : tok.place;
-            return {
-              query: cleanQuery,
-              year: tok.year,
-              trackIdx: tok.trackIdx || 0,
-              trackStepIdx: tok.trackStepIdx || 0,
-              trackStepNum: tok.trackStepNum || 1,
-              ...r,
-            };
-          })
-          .filter(Boolean);
-        if (stops.length >= 2) {
-          const trackCounters = {};
-          stops.forEach((st) => {
-            const tId = st.trackIdx || 0;
-            const n = (trackCounters[tId] || 0) + 1;
-            trackCounters[tId] = n;
-            st.trackStepIdx = n - 1;
-            st.trackStepNum = n;
-          });
-          this._renderCustomRoute(stops, zoom);
-          return this.inspect({ year, place, zoom });
-        }
-      }
-
-      if (this.activeCustomRoute) {
-        this.clearCustomRoute();
-      }
-
-      const singlePlace = placeTokens.length === 1 ? placeTokens[0].place : place;
-      const hasExplicitCoord =
-        lng !== undefined &&
-        lat !== undefined &&
-        lng !== '' &&
-        lat !== '' &&
-        !Number.isNaN(Number(lng)) &&
-        !Number.isNaN(Number(lat));
-      const resolved = !hasExplicitCoord && singlePlace ? this.resolvePlace(singlePlace, this.year) : null;
-      const targetLng = hasExplicitCoord ? Number(lng) : resolved ? resolved.lng : null;
-      const targetLat = hasExplicitCoord ? Number(lat) : resolved ? resolved.lat : null;
-
-      if (targetLng !== null && targetLat !== null) {
-        const z = Math.max(
-          1,
-          Math.min(8, Number(zoom) || (resolved && resolved.zoom) || 2.5)
-        );
-        const w = 1000 / z;
-        const h = w * this._getViewportAspect();
-        const [tx, ty] = this.projector.toScreen(targetLng, targetLat);
-        // Embeds keep the place/person card at the top right like desktop, not as a bottom sheet.
-        const isDesktop = typeof window === 'undefined' || window.innerWidth > 900 || Boolean(this.embed);
-        const xFrac = isDesktop ? 0.36 : 0.5;
-        const yFrac = isDesktop ? 0.48 : 0.21;
-        this.camera = { x: tx - w * xFrac, y: ty - h * yFrac, w, h, zoom: z };
-        this._applyCamera();
-        this.closeMilestoneBalloon();
-        const rawTrim = singlePlace
-          ? String(singlePlace).replace(/[<>]/g, '').trim()
-          : '';
-        const useResolvedZh =
-          this.locale !== 'en' &&
-          resolved &&
-          resolved.name &&
-          (rawTrim !== String(singlePlace || '').trim() ||
-            (/^[a-z0-9'’‘`\-_.\s()]+$/i.test(rawTrim) &&
-              (resolved.kind !== 'gazetteer' ||
-                String(this._enDict(resolved.name) || '')
-                  .toLowerCase()
-                  .replace(/['’‘`\-_.\s]+/g, '') ===
-                  rawTrim.toLowerCase().replace(/['’‘`\-_.\s]+/g, ''))));
-        const pinLabel = useResolvedZh
-          ? resolved.name
-          : rawTrim || (resolved ? resolved.name : '');
-        this.openGenealogyAt(targetLng, targetLat, pinLabel);
-      } else if (zoom !== undefined && zoom !== null && zoom !== '' && !Number.isNaN(Number(zoom))) {
-        const z = Math.max(1, Math.min(8, Number(zoom)));
-        const w = 1000 / z;
-        const h = 700 / z;
-        this.camera = { ...this.camera, w, h, zoom: z };
-        this._applyCamera();
-      }
-
-      return this.inspect({
-        year: this.year,
-        place: singlePlace,
-        lng: targetLng !== null ? targetLng : undefined,
-        lat: targetLat !== null ? targetLat : undefined,
-        zoom,
-      });
-    }
-
-    _restoreFromQuery() {
-      const q = new URLSearchParams(location.search);
-      if (
-        q.has('year') ||
-        q.has('place') ||
-        (q.has('lng') && q.has('lat')) ||
-        q.has('person') ||
-        q.has('journey')
-      ) {
-        this.lastRenderedSnap = null;
-        if (this.grpGhostDiff) this.grpGhostDiff.innerHTML = '';
-      }
-      const needsEn =
-        this.locale === 'en' ||
-        /[a-z]/i.test(
-          `${q.get('place') || ''} ${q.get('hover') || ''} ${q.get('q') || ''} ${q.get('person') || ''} ${q.get('journey') || ''}`
-        );
-      const afterFullSnapshots = (fn, delayMs = 80) => {
-        const run = () => setTimeout(fn, delayMs);
-        const tasks = [];
-        if (!this._fullSnapshotsLoaded && typeof window !== 'undefined') {
-          tasks.push(this._ensureFullSnapshots());
-        }
-        if (needsEn && typeof window !== 'undefined' && !this._hasEnDict()) {
-          tasks.push(this._ensureEnglishLocale());
-        }
-        if (!tasks.length) {
-          run();
-        } else {
-          Promise.all(tasks).then(run);
-        }
-      };
-      if (q.has('q')) {
-        const rawQ = (q.get('q') || '').trim();
-        if (rawQ) {
-          const inp = this._id('inp-map-search');
-          if (inp) inp.value = rawQ;
-          afterFullSnapshots(() => {
-            const hits = this._queryQuickSearch(rawQ);
-            if (hits && hits.length) this._selectSearchResult(hits[0]);
-          }, 80);
-        }
-      }
-      if (q.has('terrain')) {
-        const tv = q.get('terrain');
-        this.toggleTerrainMode(tv !== '0' && tv !== 'false');
-      }
-      if (q.has('place') || (q.has('lng') && q.has('lat'))) {
-        this.locate({
-          year: q.has('year') ? q.get('year') : undefined,
-          place: q.get('place') || '',
-          lng: q.has('lng') ? Number(q.get('lng')) : undefined,
-          lat: q.has('lat') ? Number(q.get('lat')) : undefined,
-          zoom: q.has('zoom') ? Number(q.get('zoom')) : undefined,
-        });
-      } else {
-        let traceParts = null;
-        if (q.has('trace')) {
-          const parts = (q.get('trace') || '').split(',').map(Number);
-          if (parts.length === 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1])) {
-            traceParts = parts;
-            this.activeTrace = [parts[0], parts[1]];
-          }
-        }
-        if (q.has('year')) {
-          const yList = this._parseYearList(q.get('year'));
-          if (yList.length) this.jumpToYear(yList[0]);
-        }
-        if (traceParts) {
-          afterFullSnapshots(() => {
-            this.openGenealogyAt(traceParts[0], traceParts[1]);
-          }, 80);
-        }
-        if (q.has('zoom') || q.has('center')) {
-          const z = Math.max(1, Math.min(8, Number(q.get('zoom')) || this.camera.zoom));
-          const w = 1000 / z;
-          const h = 700 / z;
-          let x = this.camera.x;
-          let y = this.camera.y;
-          if (q.has('center')) {
-            const [lng, lat] = q.get('center').split(',').map(Number);
-            if (!Number.isNaN(lng) && !Number.isNaN(lat)) {
-              const [tx, ty] = this.projector.toScreen(lng, lat);
-              x = tx - w * 0.5;
-              y = ty - h * 0.5;
-            }
-          }
-          this.camera = { x, y, w, h, zoom: z };
-          this._applyCamera();
-        }
-      }
-      if (
-        q.has('year') ||
-        q.has('place') ||
-        (q.has('lng') && q.has('lat')) ||
-        q.has('person') ||
-        q.has('journey')
-      ) {
-        afterFullSnapshots(() => {
-          if (typeof document === 'undefined' || !document.body || !document.createElement) return;
-          let node = this._id('atlas-inspect-json');
-          if (!node) {
-            node = document.createElement('script');
-            node.id = 'atlas-inspect-json';
-            node.type = 'application/json';
-            document.body.appendChild(node);
-          }
-          node.textContent = JSON.stringify(
-            this.inspect({
-              year: q.has('year') ? q.get('year') : undefined,
-              place: q.get('place') || '',
-              lng: q.has('lng') ? Number(q.get('lng')) : undefined,
-              lat: q.has('lat') ? Number(q.get('lat')) : undefined,
-              zoom: q.has('zoom') ? Number(q.get('zoom')) : undefined,
-              person: q.get('person') || q.get('journey') || undefined,
-              stop: q.has('stop') ? Number(q.get('stop')) : undefined,
-            })
-          );
-        }, 40);
-      }
-      if (q.has('hover')) {
-        const targetPref = q.get('hover');
-        this.closeMilestoneBalloon();
-        afterFullSnapshots(() => {
-          this.closeMilestoneBalloon();
-          if (this._deferredPrefectureSnap) {
-            const prefChk = this._id('chk-prefectures');
-            if (prefChk) prefChk.checked = true;
-            if (this.grpPrefectures && this.grpPrefectures.classList) {
-              this.grpPrefectures.classList.remove('is-hidden');
-            }
-            this._materializeDeferredPrefectures();
-            this._rescaleSvgTypography();
-          }
-          let el = this.grpPrefectures.querySelector(
-            `.prefecture-shape[data-pref-title="${CSS.escape(targetPref)}"]`
-          );
-          if (!el && targetPref) {
-            const fold = (s) =>
-              String(s || '')
-                .toLowerCase()
-                .replace(/\s+(?:prefecture|commandery|circuit|province|fu|zhou|jun)$/i, '')
-                .replace(/['’‘`\-_.\s]+/g, '');
-            const qFold = fold(targetPref);
-            const shapes = Array.from(this.grpPrefectures.querySelectorAll('.prefecture-shape'));
-            el =
-              shapes.find((node) => {
-                const zh = node.dataset && node.dataset.prefTitle;
-                if (!zh) return false;
-                const en = this._enDict(zh);
-                return (
-                  en.toLowerCase() === targetPref.trim().toLowerCase() ||
-                  (qFold.length >= 2 && fold(en) === qFold) ||
-                  zh.replace(/(?:州|府|郡|道|路)$/, '') ===
-                    targetPref.trim().replace(/(?:州|府|郡|道|路)$/, '')
-                );
-              }) || null;
-          }
-          if (el) {
-            this._setHoveredPrefecture(el);
-            const box = el.getBoundingClientRect();
-            const cx = box.left + box.width * 0.55;
-            const cy = box.top + box.height * 0.45;
-            const cur = this.dynasties[this.dynastyIdx];
-            const snapKey = this._resolveSnapKey(cur, this.year);
-            const snap = this.snapshots[snapKey] || {};
-            const mainPol = (snap.polities || []).find((p) => p.role === 'main') || (snap.polities || [])[0];
-            let provName = '';
-            const stack = document.elementsFromPoint(cx, cy);
-            const polEl = stack.find(
-              (node) => node.dataset && node.dataset.polityTitle && node.dataset.polityRole !== 'neighbor'
-            );
-            const resolvedPolTitle = (polEl && polEl.dataset.polityTitle) || (mainPol && mainPol.title) || '';
-            const provEl = stack.find((node) => node.dataset && node.dataset.provTitle);
-            if (provEl) provName = provEl.dataset.provTitle;
-            const pName = this.trTerm(el.dataset.prefTitle);
-            const pCat = el.dataset.prefCategory;
-            const pEmigre = pCat === '侨州' || pCat === '侨郡';
-            const lines = [
-              `<b>${
-                this.locale === 'en'
-                  ? pName + (pEmigre ? ' (Emigre)' : '')
-                  : pName + (pCat && !pName.endsWith(pCat) ? '（' + pCat + '）' : '')
-              }</b>`,
-            ];
-            if (resolvedPolTitle) {
-              lines.push(
-                `<div class="tt-sub">${this.uiStr('belongs_to', '属 ')}${this.trTerm(resolvedPolTitle)}</div>`
-              );
-            }
-            if (provName) {
-              lines.push(
-                `<div class="tt-sub">${this.uiStr('now_prov', '今：')}${this.trTerm(provName)}</div>`
-              );
-            }
-            this._showHoverTip({ clientX: cx, clientY: cy }, lines.join(''));
-          }
-        }, 120);
-      }
-      if (q.has('quiz')) {
-        this._paneAutoCollapsed = true;
-        this.toggleChroniclePane(true);
-        setTimeout(() => this.startChallenge({ preferCurrentDynasty: q.has('year') }), 120);
-      }
-      if (q.has('person')) {
-        const rawP = (q.get('person') || '').trim();
-        const evIdx = q.has('stop') ? Number(q.get('stop')) : -1;
-        if (rawP) {
-          afterFullSnapshots(() => {
-            this.openPersonChronicle(rawP, Number.isNaN(evIdx) ? -1 : evIdx);
-          }, 80);
-        }
-      }
-      if (q.has('journey')) {
-        const jKey = (q.get('journey') || '').trim();
-        const stopIdx = q.has('stop') ? Number(q.get('stop')) : -1;
-        if (jKey) {
-          afterFullSnapshots(() => {
-            this.openJourneyAsPerson(jKey, Number.isNaN(stopIdx) ? -1 : stopIdx);
-          }, 80);
-        }
-      }
-      if (q.has('polity')) {
-        const pKey = (q.get('polity') || '').trim();
-        if (pKey) afterFullSnapshots(() => this.openPolityByKey(pKey), 80);
-      }
-      if (q.has('layers')) {
-        setTimeout(() => {
-          const btn = this._id('act-layers-menu');
-          if (btn) btn.click();
-        }, 120);
-      }
-      if (q.has('mob_chron')) {
-        setTimeout(() => this.toggleMobileChronicle(true), 120);
-      }
-      if (q.has('mob_leg')) {
-        setTimeout(() => {
-          const btn = this.mapKey && this.mapKey.querySelector('.key-mobile-toggle');
-          if (btn) btn.click();
-        }, 120);
-      }
-      this._armUrlSync(
-        ['year', 'polity', 'person', 'journey', 'trace', 'place', 'lng', 'q'].some((k) => q.has(k))
-      );
-    }
-
-    _registerWebMcpTools() {
-      if (typeof navigator === 'undefined' || !navigator.modelContext) return [];
-      const mc = navigator.modelContext;
-      const applyOptionalLang = (lang) => {
-        if (!lang) return;
-        const norm = String(lang).toLowerCase();
-        const nextLoc =
-          norm === 'en' ? 'en' : /^(zh-tw|zh_tw|tw|hk|zh-hk|zh-hant|hant)$/.test(norm) ? 'zh-tw' : 'zh';
-        if (nextLoc !== this.locale) {
-          this.locale = nextLoc;
-          this._syncUrlLangParam();
-          this.applyLocale();
-        }
-      };
-      const tools = [
-        {
-          name: 'jiangshan_locate',
-          description:
-            'Locate a historical Chinese place, poem site, battle, or multi-stop route on the Jiangshan Historical Atlas (403 BCE – 2026 CE), move the map camera, open the 2,400-year administrative genealogy card, and return structured historical context.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              year: {
-                type: ['integer', 'string'],
-                description:
-                  'Historical year (-403 to 2026, negative for BCE, no year 0) or comma-separated years for multi-year routes.',
-              },
-              place: {
-                type: 'string',
-                description:
-                  'Single canonical ancient/modern place name, comma-separated route stops, or semicolon-separated converging routes (e.g. "许昌,江陵,赤壁;柴桑,樊口,赤壁") in Chinese, English, or Pinyin.',
-              },
-              zoom: {
-                type: 'number',
-                description: 'Optional zoom level override (1.0 to 8.0).',
-              },
-              lang: {
-                type: 'string',
-                enum: ['zh', 'zh-tw', 'en'],
-                description: 'Optional UI and response language.',
-              },
-            },
-            required: ['year', 'place'],
-          },
-          execute: async (args = {}) => {
-            applyOptionalLang(args.lang);
-            await this._ensureFullSnapshots();
-            if (this.locale === 'en') await this._ensureEnglishLocale();
-            return this.locate({
-              year: args.year,
-              place: args.place,
-              zoom: args.zoom,
-            });
-          },
-        },
-        {
-          name: 'jiangshan_inspect',
-          description:
-            'Read-only historical geography query returning reigning monarch/era, controlling regime (polity), macro-region (dao/lu/province), prefecture (jun/zhou/fu), modern province/city, 2,400-year city/pass lore, or person chronicle events without moving the camera.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              year: {
-                type: ['integer', 'string'],
-                description: 'Historical year (-403 to 2026) or comma-separated years.',
-              },
-              place: {
-                type: 'string',
-                description:
-                  'Optional ancient/modern place name, comma-separated route stops, or semicolon-separated converging routes (e.g. "许昌,江陵,赤壁;柴桑,樊口,赤壁").',
-              },
-              person: {
-                type: 'string',
-                description:
-                  'Optional single historical figure or comma-separated 2–4 figures (e.g. "libai,dufu,gaoshi" or "caocao,liubei,sunquan").',
-              },
-              stop: {
-                type: 'integer',
-                description: 'Optional 0-based event stop index for person chronicle.',
-              },
-              lang: {
-                type: 'string',
-                enum: ['zh', 'zh-tw', 'en'],
-                description: 'Optional response language.',
-              },
-            },
-          },
-          execute: async (args = {}) => {
-            applyOptionalLang(args.lang);
-            await this._ensureFullSnapshots();
-            if (this.locale === 'en') await this._ensureEnglishLocale();
-            return this.inspect({
-              year: args.year,
-              place: args.place,
-              person: args.person,
-              stop: args.stop,
-            });
-          },
-        },
-        {
-          name: 'jiangshan_open_person',
-          description:
-            'Open the spatio-temporal life & poetry chronicle (点人溯事) on the map for 1–4 Chinese historical figures or monarchs and return their geocoded life stops and shared historical encounters.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              person: {
-                type: 'string',
-                description:
-                  'Single historical figure or comma-separated 2–4 figures (e.g. "libai,dufu,gaoshi" or "李白,杜甫,高适") in Chinese, English, or Pinyin.',
-              },
-              stop: {
-                type: 'integer',
-                description: 'Optional 0-based stop index (-1 for full route overview).',
-              },
-              lang: {
-                type: 'string',
-                enum: ['zh', 'zh-tw', 'en'],
-                description: 'Optional UI and response language.',
-              },
-            },
-            required: ['person'],
-          },
-          execute: async (args = {}) => {
-            applyOptionalLang(args.lang);
-            await this._ensureFullSnapshots();
-            if (this.locale === 'en') await this._ensureEnglishLocale();
-            const stopIdx = typeof args.stop === 'number' ? args.stop : -1;
-            this.openPersonChronicle(args.person, stopIdx);
-            return this.inspect({
-              person: args.person,
-              stop: stopIdx >= 0 ? stopIdx : undefined,
-            });
-          },
-        },
-      ];
-      try {
-        if (typeof mc.registerTool === 'function') {
-          for (const t of tools) mc.registerTool(t);
-        } else if (typeof mc.provideContext === 'function') {
-          mc.provideContext({ tools });
-        }
-      } catch (_) {}
-      return tools;
-    }
+    // AI-Native Public API (resolvePlace / inspect / locate / _restoreFromQuery) methods are attached by js/atlas_api.js.
   }
 
   HistoricalAtlasController._extendPrototype = function (mixin) {
@@ -16862,6 +10892,9 @@
     }
   };
   HistoricalAtlasController._escHtml = escHtml;
+  HistoricalAtlasController._svgIcons = SVG_ICONS;
+  HistoricalAtlasController._projectorClass = MercatorProjector;
+  HistoricalAtlasController._eraDynastyPrefixes = ERA_DYNASTY_PREFIXES;
 
   window.MercatorProjector = MercatorProjector;
   window.HistoricalAtlasController = HistoricalAtlasController;

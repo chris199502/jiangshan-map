@@ -5,12 +5,14 @@
  * and stamps/verifies index.html cache-busting query strings + lazy-bundle data attributes.
  *
  * Usage:
- *   node scripts/sync_version.js          # Update index.html in place
- *   node scripts/sync_version.js --check  # Verify index.html & js/app.js without writing
+ *   node scripts/sync_version.js                            # Update index.html in place & configure git merge driver
+ *   node scripts/sync_version.js --check                    # Verify index.html & controller scripts without writing
+ *   node scripts/sync_version.js --merge-driver %O %A %B    # Git custom merge driver for index.html ?v= conflicts
  */
 'use strict';
 
 const assert = require('assert');
+const { execFileSync, spawnSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -19,7 +21,18 @@ const ROOT = path.resolve(__dirname, '..');
 
 const CONTROLLER_SCRIPTS = [
   'js/app.js',
+  'js/atlas_trace.js',
+  'js/atlas_search.js',
+  'js/atlas_api.js',
   'js/atlas_quiz.js',
+  'js/atlas_narrator.js',
+];
+
+const SYNC_CONTROLLER_SCRIPTS = [
+  'js/app.js',
+  'js/atlas_trace.js',
+  'js/atlas_search.js',
+  'js/atlas_api.js',
 ];
 
 const STATIC_TAG_ASSETS = [
@@ -27,14 +40,19 @@ const STATIC_TAG_ASSETS = [
   'js/china_geo_data.js',
   'js/atlas_boot.js',
   'js/map_data.js',
-  'js/lore_data.js',
-  'js/zh_hant.js',
-  ...CONTROLLER_SCRIPTS,
+  'js/lore_core.js',
+  'js/atlas_track.js',
+  ...SYNC_CONTROLLER_SCRIPTS,
 ];
 
 const LAZY_ATTR_ASSETS = [
   { attr: 'data-v-snapshots', datasetKey: 'vSnapshots', relPath: 'js/atlas_snapshots.js' },
   { attr: 'data-v-i18n', datasetKey: 'vI18n', relPath: 'js/i18n_dict.js' },
+  { attr: 'data-v-lore', datasetKey: 'vLore', relPath: 'js/lore_detail.js' },
+  { attr: 'data-v-pinyin', datasetKey: 'vPinyin', relPath: 'js/event_pinyin.js' },
+  { attr: 'data-v-hant', datasetKey: 'vHant', relPath: 'js/zh_hant.js' },
+  { attr: 'data-v-quiz', datasetKey: 'vQuiz', relPath: 'js/atlas_quiz.js' },
+  { attr: 'data-v-narrator', datasetKey: 'vNarrator', relPath: 'js/atlas_narrator.js' },
 ];
 
 function shortSha256(filePath) {
@@ -79,10 +97,61 @@ function applyHashesToIndexHtml(indexHtml, hashes) {
   assert(appTagMatch, 'Expected <script ... src="js/app.js?v=..."> tag in index.html');
   const expectedAppTag =
     `<script id="atlas-app-script" src="js/app.js?v=${hashes['js/app.js']}"` +
-    ` data-v-snapshots="${hashes['js/atlas_snapshots.js']}"` +
-    ` data-v-i18n="${hashes['js/i18n_dict.js']}"></script>`;
+    LAZY_ATTR_ASSETS.map(({ attr, relPath }) => ` ${attr}="${hashes[relPath]}"`).join('') +
+    '></script>';
   out = out.replace(appTagRe, expectedAppTag);
   return out;
+}
+
+function normalizeIndexHtmlHashes(indexHtml) {
+  const zeroHashes = {};
+  for (const relPath of STATIC_TAG_ASSETS) zeroHashes[relPath] = '00000000';
+  for (const { relPath } of LAZY_ATTR_ASSETS) zeroHashes[relPath] = '00000000';
+  return applyHashesToIndexHtml(indexHtml, zeroHashes);
+}
+
+function runIndexHtmlMergeDriver(ancestorPath, currentPath, otherPath, rootDir = ROOT) {
+  for (const p of [ancestorPath, currentPath, otherPath]) {
+    const raw = fs.readFileSync(p, 'utf8');
+    fs.writeFileSync(p, normalizeIndexHtmlHashes(raw), 'utf8');
+  }
+  const mergeRes = spawnSync('git', ['merge-file', '-q', currentPath, ancestorPath, otherPath], {
+    cwd: rootDir,
+    stdio: 'inherit',
+  });
+  const merged = fs.readFileSync(currentPath, 'utf8');
+  const hashes = computeAssetHashes(rootDir);
+  if (mergeRes.status === 0) {
+    fs.writeFileSync(currentPath, applyHashesToIndexHtml(merged, hashes), 'utf8');
+  }
+  return mergeRes.status || 0;
+}
+
+function ensureGitMergeDriverConfig(rootDir = ROOT) {
+  try {
+    const driverCmd = 'node scripts/sync_version.js --merge-driver %O %A %B';
+    const cur = execFileSync('git', ['config', '--get', 'merge.sync-version.driver'], {
+      cwd: rootDir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (cur === driverCmd) return true;
+  } catch (_) {}
+  try {
+    execFileSync(
+      'git',
+      ['config', 'merge.sync-version.name', 'Jiangshan index.html asset hash auto-merge driver'],
+      { cwd: rootDir, stdio: 'ignore' }
+    );
+    execFileSync(
+      'git',
+      ['config', 'merge.sync-version.driver', 'node scripts/sync_version.js --merge-driver %O %A %B'],
+      { cwd: rootDir, stdio: 'ignore' }
+    );
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 function verifyIndexHtmlAssetHashes(rootDir = ROOT, indexHtmlInput = null, appCodeInput = null) {
@@ -147,18 +216,27 @@ function syncIndexHtmlAssetHashes(rootDir = ROOT) {
   if (changed) {
     fs.writeFileSync(indexPath, after, 'utf8');
   }
+  ensureGitMergeDriverConfig(rootDir);
   return { changed, hashes };
 }
 
 if (require.main === module) {
-  const args = new Set(process.argv.slice(2));
+  const rawArgs = process.argv.slice(2);
+  const args = new Set(rawArgs);
   if (args.has('--help') || args.has('-h')) {
     console.log(
-      'Usage: node scripts/sync_version.js [--check]\n' +
-        '  (default)  Compute SHA-256 short hashes for CSS/JS assets and update index.html\n' +
-        '  --check    Verify index.html & js/app.js asset hashes without modifying files'
+      'Usage: node scripts/sync_version.js [--check | --merge-driver %O %A %B]\n' +
+        '  (default)                   Compute SHA-256 short hashes for CSS/JS assets and update index.html\n' +
+        '  --check                     Verify index.html & controller asset hashes without modifying files\n' +
+        '  --merge-driver %O %A %B     Git merge driver to auto-resolve index.html ?v= hash conflicts'
     );
     process.exit(0);
+  }
+  const mdIdx = rawArgs.indexOf('--merge-driver');
+  if (mdIdx !== -1) {
+    const [anc, cur, oth] = rawArgs.slice(mdIdx + 1, mdIdx + 4);
+    assert(anc && cur && oth, 'Expected 3 file paths (%O %A %B) after --merge-driver');
+    process.exit(runIndexHtmlMergeDriver(anc, cur, oth, ROOT));
   }
   if (args.has('--check')) {
     const hashes = verifyIndexHtmlAssetHashes(ROOT);
@@ -183,6 +261,8 @@ module.exports = {
   LAZY_ATTR_ASSETS,
   computeAssetHashes,
   applyHashesToIndexHtml,
+  normalizeIndexHtmlHashes,
+  runIndexHtmlMergeDriver,
   verifyIndexHtmlAssetHashes,
   syncIndexHtmlAssetHashes,
 };

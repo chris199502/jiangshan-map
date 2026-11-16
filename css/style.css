@@ -643,6 +643,15 @@ h2 {
   opacity: 1;
 }
 
+#grp-paleo-sea {
+  pointer-events: none;
+}
+
+.paleo-sea {
+  fill: #e6dfd1;
+  stroke: none;
+}
+
 .terrain-edge-stop {
   stop-color: var(--water-fill);
 }
@@ -2805,10 +2814,14 @@ h2 {
   transition: background 0.15s, border-color 0.15s;
 }
 
-#milestone-list li:hover,
+#milestone-list li:not(.polity-empty):not(.is-current):hover {
+  background: rgba(255, 255, 255, 0.85);
+}
+
 #milestone-list li.is-current {
   background: #fff;
   border-color: var(--vermilion);
+  box-shadow: inset 3px 0 0 var(--vermilion);
 }
 
 #milestone-list .ev-yr {
@@ -2968,10 +2981,182 @@ h2 {
   color: var(--vermilion);
 }
 
+.narrator-btn {
+  min-width: 28px;
+  padding: 0 7px;
+}
+
 #scrubber-rail-wrap {
   position: relative;
   padding-top: 44px;
   min-width: 0;
+}
+
+#scrubber-viewport {
+  position: relative;
+}
+
+#scrubber-viewport.is-zoomed {
+  overflow-x: auto;
+  padding-top: 6px;
+  margin-top: -6px;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+#scrubber-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+#scrubber-viewport.is-zoomed #scrubber-content {
+  /* The translated playhead wrapper must not extend the scroll range. */
+  overflow-x: clip;
+}
+
+#scrubber-viewport.is-zoomed #scrubber-ticks span:first-child {
+  transform: none;
+}
+
+#scrubber-viewport.is-zoomed #tick-present {
+  transform: translateX(-100%);
+}
+
+/* iPhone Photos style edge trim handles directly on the main timeline */
+.timeline-crop-mask {
+  position: absolute;
+  top: 44px;
+  height: 34px;
+  background: rgba(37, 30, 24, 0.46);
+  backdrop-filter: grayscale(0.65);
+  pointer-events: none;
+  z-index: 6;
+  display: none;
+}
+
+#scrubber-rail-wrap.is-cropping .timeline-crop-mask {
+  display: block;
+}
+
+#timeline-crop-mask-left {
+  left: 0;
+  border-radius: 8px 0 0 8px;
+}
+
+#timeline-crop-mask-right {
+  right: 0;
+  border-radius: 0 8px 8px 0;
+}
+
+.timeline-edge {
+  position: absolute;
+  top: 42px;
+  height: 38px;
+  width: 18px;
+  cursor: ew-resize;
+  z-index: 8;
+  touch-action: none;
+  user-select: none;
+  outline: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.timeline-edge-start {
+  left: -8px;
+}
+
+.timeline-edge-end {
+  right: -8px;
+}
+
+.timeline-edge::before {
+  content: '';
+  width: 10px;
+  height: 38px;
+  background: #5a4a3a;
+  border: 1.5px solid rgba(247, 240, 226, 0.92);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.26);
+  transition: background 0.14s, transform 0.14s, box-shadow 0.14s;
+}
+
+.timeline-edge-start::before {
+  border-radius: 7px 2px 2px 7px;
+}
+
+.timeline-edge-end::before {
+  border-radius: 2px 7px 7px 2px;
+}
+
+.timeline-edge::after {
+  content: '';
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  width: 1.5px;
+  border-radius: 1px;
+  background: rgba(247, 240, 226, 0.9);
+}
+
+.timeline-edge:hover::before,
+.timeline-edge.is-active::before,
+#scrubber-viewport.is-zoomed ~ .timeline-edge::before {
+  background: var(--vermilion);
+}
+
+.timeline-edge:hover::before,
+.timeline-edge.is-active::before {
+  transform: scaleX(1.12);
+}
+
+#scrubber-dock.is-challenge-locked .timeline-edge {
+  pointer-events: none;
+  opacity: 0.35;
+}
+
+@media (max-width: 900px) {
+  .timeline-crop-mask {
+    top: 44px;
+    height: 30px;
+  }
+  .timeline-edge {
+    top: 42px;
+    height: 34px;
+    width: 24px;
+  }
+  .timeline-edge-start {
+    left: -11px;
+  }
+  .timeline-edge-end {
+    right: -11px;
+  }
+  .timeline-edge::before {
+    height: 34px;
+  }
+}
+
+@media (max-width: 640px) {
+  .timeline-crop-mask {
+    top: 39px;
+    height: 28px;
+  }
+  .timeline-edge {
+    top: 37px;
+    height: 32px;
+    width: 24px;
+  }
+  .timeline-edge::before {
+    height: 32px;
+  }
+  .timeline-edge::after {
+    top: 8px;
+    bottom: 8px;
+  }
+}
+
+html.is-embed .timeline-edge,
+html.is-embed .timeline-crop-mask {
+  display: none !important;
 }
 
 #scrubber-Bubble {
@@ -3248,7 +3433,7 @@ h2 {
   transform: scale(0.95);
 }
 
-.year-stepper input {
+#inp-year {
   width: 60px;
   border: none;
   outline: none;
@@ -3636,7 +3821,7 @@ html[lang="en"] .genealogy-list li {
   .playback-controls-group {
     grid-column: 1;
     grid-row: 1;
-    gap: 5px;
+    gap: 4px;
   }
   .round-btn {
     width: 28px;
@@ -3647,11 +3832,15 @@ html[lang="en"] .genealogy-list li {
     height: 12px;
   }
   .play-speed-btn {
-    min-width: 34px;
+    min-width: 30px;
     height: 24px;
-    padding: 0 7px;
+    padding: 0 5px;
     border-radius: 12px;
     font-size: 11px;
+  }
+  .narrator-btn {
+    min-width: 24px;
+    padding: 0 5px;
   }
   .year-stepper {
     grid-column: 3;
@@ -3660,7 +3849,7 @@ html[lang="en"] .genealogy-list li {
     gap: 2px;
     border-radius: 6px;
   }
-  .year-stepper input,
+  #inp-year,
   .year-stepper .unit-label {
     display: none;
   }
@@ -3724,14 +3913,14 @@ html[lang="en"] .genealogy-list li {
   }
   #scrubber-Bubble {
     top: -54px;
-    left: 70px !important;
+    left: 94px !important;
     right: 90px !important;
     width: fit-content;
-    max-width: calc(100% - 160px);
+    max-width: calc(100% - 184px);
     margin: 0 auto;
     transform: none !important;
-    font-size: 10.8px;
-    padding: 2.5px 8px;
+    font-size: 10.5px;
+    padding: 2.5px 7px;
     border-radius: 999px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -3863,14 +4052,14 @@ html[lang="en"] .genealogy-list li {
   cursor: pointer;
 }
 
-.polity-stage-chip:hover,
+.polity-stage-chip:not(.is-current):hover {
+  background: rgba(255, 255, 255, 0.85);
+}
+
 .polity-stage-chip.is-current {
   background: #fff;
   border-color: var(--dynasty-accent);
   color: var(--dynasty-accent);
-}
-
-.polity-stage-chip.is-current {
   font-weight: 600;
 }
 
@@ -5398,13 +5587,18 @@ html[lang="en"] #act-toggle-pane .tp-label {
 }
 
 .journey-node.is-hover-pin .jn-disc {
-  fill: var(--vermilion);
-  stroke: #fffaf2;
-  transform: scale(1.14);
+  transform: scale(1.12);
 }
 
-.journey-node.is-hover-pin .jn-num {
-  fill: #fffaf2;
+.journey-node.is-hover-pin:not(.is-current) .jn-disc {
+  fill: #fdf7ed;
+  stroke: currentColor;
+  stroke-width: 2.2px;
+}
+
+.journey-node.is-current.is-hover-pin .jn-disc {
+  fill: currentColor;
+  stroke: #fffaf2;
 }
 
 .genealogy-list li.person-ev-row {
@@ -5801,6 +5995,7 @@ html.is-embed #start-guide,
 html.is-embed #gesture-guide,
 html.is-embed #challenge-card,
 html.is-embed #act-play-speed,
+html.is-embed #act-narrator,
 html.is-embed #seo-atlas-directory,
 html.is-embed #seo-static-topics-section {
   display: none !important;
@@ -5983,4 +6178,121 @@ html.is-embed.is-embed-locked #scrubber-dock {
   html.is-embed #genealogy-card.is-sheet-expanded {
     max-height: 55%;
   }
+}
+
+/* Event Storyline Mod (点事溯局 · #297) */
+.ev-seal-tag.ev-story-tag {
+  background: rgba(181, 56, 38, 0.1);
+  border-color: rgba(181, 56, 38, 0.35);
+  color: #9e2a2b;
+}
+
+.ev-seal-tag.ev-story-tag:hover {
+  background: #9e2a2b;
+  border-color: #9e2a2b;
+  color: #fffaf2;
+}
+
+button.story-inline-person {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0 1px;
+  margin: 0;
+  font: inherit;
+  font-weight: 700;
+  color: var(--actor-color, #8c2d19);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--actor-color, #9e2a2b) 48%, transparent);
+  text-underline-offset: 2.5px;
+  cursor: pointer;
+  transition: color 0.14s, background 0.14s;
+  border-radius: 2px;
+}
+
+button.story-inline-person:hover {
+  color: var(--actor-color, #b53826);
+  background: color-mix(in srgb, var(--actor-color, #b53826) 11%, transparent);
+  text-decoration-color: var(--actor-color, #b53826);
+}
+
+.story-camp-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px dashed rgba(120, 92, 68, 0.22);
+  font-family: var(--serif-stack);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.story-camp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4.5px;
+  color: var(--camp-color, #8c2d19);
+}
+
+.story-camp-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--camp-color, #b53826);
+  box-shadow: 0 0 0 1.5px rgba(255, 250, 240, 0.9);
+  flex-shrink: 0;
+}
+
+.story-camp-vs {
+  font-size: 10.5px;
+  color: rgba(110, 86, 66, 0.72);
+  user-select: none;
+}
+
+.genealogy-list li.story-act-row {
+  display: block;
+  padding: 5px 8px 2px;
+  margin-top: 2px;
+  border-bottom: none;
+  background: transparent !important;
+  cursor: default;
+  pointer-events: none;
+}
+
+.story-act-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2.5px 7px;
+  border-radius: 3px;
+  background: rgba(122, 92, 67, 0.085);
+  border-left: 2.5px solid rgba(140, 62, 42, 0.55);
+  font-family: var(--serif-stack);
+  font-size: 10.8px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #5b3e2b;
+}
+
+.genealogy-list li.person-ev-row[style*="--camp-color"] .cr-stop-num {
+  color: var(--camp-color);
+  border-color: color-mix(in srgb, var(--camp-color) 42%, transparent);
+  background: color-mix(in srgb, var(--camp-color) 11%, rgba(255, 250, 240, 0.92));
+}
+
+.genealogy-list li.person-ev-row[style*="--camp-color"].is-current {
+  background: color-mix(in srgb, var(--camp-color) 11%, transparent);
+  box-shadow: inset 3px 0 0 var(--camp-color);
+}
+
+.genealogy-list li.person-ev-row[style*="--camp-color"].is-current .cr-stop-num {
+  background: var(--camp-color);
+  border-color: var(--camp-color);
+  color: #fffaf2;
+}
+
+.genealogy-list li.person-ev-row[style*="--camp-color"] .person-ev-quote {
+  border-left-color: color-mix(in srgb, var(--camp-color) 42%, transparent);
 }
