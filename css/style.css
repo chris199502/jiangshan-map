@@ -2992,6 +2992,14 @@ h2 {
   min-width: 0;
 }
 
+/* The rail reserves 22px extra above the track for the years-ago line; shift
+   the side controls by the same 22px plus the track/ruler offset (28px total
+   → 14px center shift) so they stay centered on the track. */
+#scrubber-dock > .playback-controls-group,
+#scrubber-dock > .year-stepper {
+  margin-top: 28px;
+}
+
 #scrubber-viewport {
   position: relative;
 }
@@ -3817,6 +3825,10 @@ html[lang="en"] .genealogy-list li {
     row-gap: 7px;
     column-gap: 6px;
     padding: 6px 10px calc(7px + env(safe-area-inset-bottom, 0px));
+  }
+  #scrubber-dock > .playback-controls-group,
+  #scrubber-dock > .year-stepper {
+    margin-top: 0;
   }
   .playback-controls-group {
     grid-column: 1;
