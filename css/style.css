@@ -1,9 +1,7 @@
 :root {
   --bg-parchment: #f3eee4;
-  --bg-parchment-alt: #ebe4d6;
   --water-fill: #d6e0de;
   --province-fill: #efe8da;
-  --province-border: #c7bba6;
   --text-main: #2b2622;
   --text-secondary: #5d554c;
   --text-muted: #8d847a;
@@ -309,20 +307,7 @@ h2 {
   color: var(--text-main);
 }
 
-.github-pill-group {
-  display: inline-flex;
-  align-items: stretch;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.65);
-  border: 1px solid var(--hairline);
-  overflow: hidden;
-}
-
-.github-pill-group .github-star-btn {
-  border: none;
-  border-radius: 999px 0 0 999px;
-  background: transparent;
-  padding-right: 8.5px;
+.github-star-btn {
   text-decoration: none;
   font-weight: 600;
   gap: 4px;
@@ -335,8 +320,7 @@ h2 {
   transition: transform 0.15s ease, color 0.15s ease;
 }
 
-.github-pill-group .github-star-btn:hover {
-  background: #fff;
+.github-star-btn:hover {
   color: var(--text-main);
 }
 
@@ -345,41 +329,29 @@ h2 {
   transform: scale(1.15);
 }
 
-.github-pill-group .github-more-btn {
-  border: none;
-  border-left: 1px solid var(--hairline) !important;
-  border-radius: 0 999px 999px 0;
-  background: transparent;
-  padding: 5.5px 8px 5.5px 7px;
+.more-menu-btn {
+  align-self: stretch;
+  padding: 5.5px 9px;
   color: var(--text-secondary);
   cursor: pointer;
 }
 
-.github-pill-group .github-more-btn .caret-mark {
-  font-size: 9.5px;
+.more-menu-btn .more-dots-mark {
+  font-size: 13px;
   line-height: 1;
-  opacity: 0.65;
-  transition: transform 0.15s ease, opacity 0.15s ease;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
-.github-pill-group .github-more-btn:hover {
+.more-menu-btn:hover {
   background: #fff;
   color: var(--text-main);
 }
 
-.github-pill-group .github-more-btn:hover .caret-mark {
-  opacity: 0.95;
-}
-
-.github-pill-group .github-more-btn.is-active {
+.more-menu-btn.is-active {
   background: #fff !important;
-  color: var(--text-main) !important;
-  border-left-color: var(--hairline) !important;
-}
-
-.github-pill-group .github-more-btn.is-active .caret-mark {
-  opacity: 0.95;
-  transform: rotate(180deg);
+  color: var(--vermilion) !important;
+  border-color: rgba(181, 69, 47, 0.35) !important;
 }
 
 .more-popover {
@@ -403,7 +375,7 @@ h2 {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 8px 10px;
+  padding: 8px 12px 8px 10px;
   border-radius: 8px;
   text-decoration: none;
   color: var(--text-main);
@@ -447,16 +419,19 @@ h2 {
   text-overflow: ellipsis;
 }
 
-.more-ext-mark {
-  font-size: 11px;
-  color: var(--text-muted);
-  opacity: 0.7;
-  flex-shrink: 0;
+.more-link-sub.is-copied {
+  color: var(--vermilion);
+  font-weight: 600;
 }
 
-.more-pop-link:hover .more-ext-mark {
-  color: var(--vermilion);
-  opacity: 1;
+.more-mobile-only {
+  display: none;
+}
+
+.more-pop-divider {
+  height: 0;
+  border-top: 1px dashed var(--hairline);
+  margin: 3px 6px;
 }
 
 .music-pill-group {
@@ -1002,36 +977,43 @@ html.deeplink-boot #inp-year {
 .polity-shape {
   fill-rule: nonzero;
   fill-opacity: 0.38;
-  stroke-width: 1.85;
+  stroke-width: 1.35;
+  stroke-opacity: 0.72;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
   transition: fill-opacity 0.2s;
 }
 
 #atlas-svg.terrain-active .polity-shape {
-  fill-opacity: 0.24;
+  fill-opacity: 0.25;
   mix-blend-mode: multiply;
-  stroke-width: 1.9;
+  stroke-width: 1.3;
+  stroke-opacity: 0.62;
 }
 
 .polity-shape.rival {
   fill-opacity: 0.35;
-  stroke-width: 1.65;
+  stroke-width: 1.2;
+  stroke-opacity: 0.68;
 }
 
 #atlas-svg.terrain-active .polity-shape.rival {
-  fill-opacity: 0.22;
-  stroke-width: 1.75;
+  fill-opacity: 0.23;
+  stroke-width: 1.15;
+  stroke-opacity: 0.58;
 }
 
 .polity-shape.protectorate {
   fill-opacity: 0.24;
   stroke-dasharray: 5 3;
-  stroke-width: 1.4;
+  stroke-width: 1.15;
+  stroke-opacity: 0.72;
 }
 
 #atlas-svg.terrain-active .polity-shape.protectorate {
-  fill-opacity: 0.16;
+  fill-opacity: 0.17;
+  stroke-width: 1.1;
+  stroke-opacity: 0.64;
 }
 
 .polity-shape.neighbor {
@@ -1957,14 +1939,14 @@ html.deeplink-boot #inp-year {
   background: rgba(243, 238, 228, 0.92);
   border: 1px solid var(--hairline);
   border-radius: 10px;
-  padding: 8px 12px;
+  padding: 7px 11px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
   font-size: 12px;
   box-shadow: var(--card-shadow);
   backdrop-filter: blur(6px);
-  max-width: 338px;
+  max-width: 326px;
 }
 
 .key-phase-bar {
@@ -2084,19 +2066,22 @@ html.deeplink-boot #inp-year {
   gap: 5px 12px;
 }
 
+.key-polities-grid {
+  gap: 4px 10px;
+  font-size: 11.5px;
+}
+
+.key-corridors-grid {
+  border-top: 1px dashed var(--hairline);
+  padding-top: 3px;
+  font-size: 11px;
+}
+
 .key-entry {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   color: var(--text-secondary);
-}
-
-.key-note {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  color: var(--text-muted);
 }
 
 .swatch {
@@ -2395,6 +2380,12 @@ html.deeplink-boot #inp-year {
   transition: opacity 0.65s ease, transform 0.65s ease;
 }
 
+/* The English hint is a long line that crosses polity names, so it needs more contrast. */
+html[lang="en"] #gesture-guide {
+  color: var(--text-secondary);
+  background: rgba(243, 238, 228, 0.94);
+}
+
 #gesture-guide.is-dismissed,
 #viewport-frame.has-active-genealogy #gesture-guide,
 #viewport-frame.has-active-journey #gesture-guide,
@@ -2688,6 +2679,23 @@ html.deeplink-boot #inp-year {
   font-size: 13px;
 }
 
+.challenge-finish-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.challenge-star-link {
+  color: var(--vermilion);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.challenge-star-link:hover {
+  text-decoration: underline;
+}
+
 /* Quiz markers: the guess is a vermilion annotation, the answer an ink circle. */
 .quiz-dot {
   fill: none;
@@ -2816,9 +2824,47 @@ html.deeplink-boot #inp-year {
   font-size: 11px;
   padding: 2px 7px;
   border-radius: 4px;
-  background: rgba(181, 69, 47, 0.12);
-  color: var(--vermilion);
+  background: rgba(90, 74, 58, 0.09);
+  color: var(--text-secondary);
   font-weight: 600;
+  flex-shrink: 0;
+}
+
+.topic-inline-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1.5px 5px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--vermilion);
+  font-family: var(--serif-stack);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-decoration: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: color 0.14s, background 0.14s;
+}
+
+.seat-row .topic-inline-link {
+  margin-left: auto;
+}
+
+.topic-inline-link:hover {
+  color: var(--vermilion);
+  background: rgba(181, 69, 47, 0.08);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Topic pages are Chinese-only, so English mode does not offer the Guide link. */
+#chronicle-pane.is-polity-mode .seat-row .topic-inline-link,
+html.is-embed .topic-inline-link,
+html[lang="en"] .topic-inline-link {
+  display: none !important;
 }
 
 .dynasty-desc {
@@ -2912,6 +2958,11 @@ html.deeplink-boot #inp-year {
 
 #milestone-list .ev-src {
   grid-column: 1 / -1;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
   padding-top: 5px;
   border-top: 1px solid var(--hairline);
   color: var(--text-muted);
@@ -3212,10 +3263,24 @@ html.deeplink-boot #inp-year {
     top: 39px;
     height: 28px;
   }
+  #timeline-crop-mask-left {
+    left: 8px;
+  }
+  #timeline-crop-mask-right {
+    right: 8px;
+  }
   .timeline-edge {
     top: 37px;
     height: 32px;
-    width: 24px;
+    width: 28px;
+  }
+  .timeline-edge-start {
+    left: 6px;
+    justify-content: flex-start;
+  }
+  .timeline-edge-end {
+    right: 6px;
+    justify-content: flex-end;
   }
   .timeline-edge::before {
     height: 32px;
@@ -3223,6 +3288,12 @@ html.deeplink-boot #inp-year {
   .timeline-edge::after {
     top: 8px;
     bottom: 8px;
+  }
+  .timeline-edge-start::after {
+    left: 4.25px;
+  }
+  .timeline-edge-end::after {
+    right: 4.25px;
   }
 }
 
@@ -3311,6 +3382,16 @@ html.is-embed .timeline-crop-mask {
 
 .band-cell:last-child {
   border-right: none;
+}
+
+/* English band names are long enough to run under the timeline edge handles. Push the first/last
+   labels toward the inner side instead of centering them; widths and label fitting are unchanged. */
+html[lang="en"] .band-cell:first-child {
+  justify-content: flex-end;
+}
+
+html[lang="en"] .band-cell:last-child {
+  justify-content: flex-start;
 }
 
 .band-cell:hover {
@@ -3525,10 +3606,6 @@ html.is-embed .timeline-crop-mask {
   display: none !important;
 }
 
-.fade-enter {
-  animation: none;
-}
-
 /* Traditional Chinese (zh-Hant): Ma Shan Zheng lacks several Traditional glyphs (e.g. 時/戰/國/東/漢/華);
    use bold Song-style serif across brand seal and dynasty headings for uniform stroke weight. */
 html[lang="zh-Hant"] .brand-group .seal-mark {
@@ -3553,6 +3630,53 @@ html[lang="zh-Hant"] #dynasty-title {
 }
 
 /* English Locale Typography Adjustments */
+/* CJK faces draw ‘ ’ “ ” as full-width glyphs, so English text reads "Chang’ an" / "bones.” ".
+   In English mode, take only those quote marks from a local Latin face. */
+@font-face {
+  font-family: 'Latin Quotes Serif';
+  src: local('Georgia'), local('Times New Roman'), local('TimesNewRomanPSMT'), local('Noto Serif'),
+    local('DejaVu Serif'), local('Liberation Serif');
+  font-weight: 400 500;
+  unicode-range: U+2018-201F;
+}
+
+@font-face {
+  font-family: 'Latin Quotes Serif';
+  src: local('Georgia Bold'), local('Georgia-Bold'), local('Times New Roman Bold'), local('TimesNewRomanPS-BoldMT'),
+    local('Noto Serif Bold'), local('NotoSerif-Bold'), local('DejaVu Serif Bold'), local('DejaVuSerif-Bold'),
+    local('Liberation Serif Bold'), local('LiberationSerif-Bold');
+  font-weight: 600 900;
+  unicode-range: U+2018-201F;
+}
+
+@font-face {
+  font-family: 'Latin Quotes Sans';
+  src: local('Helvetica Neue'), local('HelveticaNeue'), local('Arial'), local('ArialMT'), local('Segoe UI'),
+    local('Roboto'), local('Noto Sans'), local('DejaVu Sans'), local('Liberation Sans');
+  font-weight: 400 500;
+  unicode-range: U+2018-201F;
+}
+
+@font-face {
+  font-family: 'Latin Quotes Sans';
+  src: local('Helvetica Neue Bold'), local('HelveticaNeue-Bold'), local('Arial Bold'), local('Arial-BoldMT'),
+    local('Segoe UI Bold'), local('SegoeUI-Bold'), local('Roboto Bold'), local('Roboto-Bold'), local('Noto Sans Bold'),
+    local('NotoSans-Bold'), local('DejaVu Sans Bold'), local('DejaVuSans-Bold'), local('Liberation Sans Bold'),
+    local('LiberationSans-Bold');
+  font-weight: 600 900;
+  unicode-range: U+2018-201F;
+}
+
+html[lang="en"] {
+  --serif-stack: 'Latin Quotes Serif', 'Noto Serif SC', 'Songti SC', 'SimSun', serif;
+  --sans-stack: 'Latin Quotes Sans', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+html[lang="en"] #atlas-svg {
+  --serif-stack: 'Latin Quotes Serif', 'Songti SC', 'SimSun', serif;
+  --sans-stack: 'Latin Quotes Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
 html[lang="en"] .brand-group .subtitle-mark {
   letter-spacing: 0.04em;
 }
@@ -3837,8 +3961,7 @@ html[lang="en"] .genealogy-list li {
   #act-locale-hant .btn-svg,
   #act-locale .btn-svg,
   #lbl-music,
-  #act-github-star .star-mark,
-  #lbl-github-star {
+  #act-github-star {
     display: none !important;
   }
   .action-btn {
@@ -3857,12 +3980,11 @@ html[lang="en"] .genealogy-list li {
     min-width: 0;
     padding: 4px 6.5px;
   }
-  .music-pill-group .music-btn,
-  #act-github-star {
+  .music-pill-group .music-btn {
     padding: 4px 6.5px;
   }
-  .github-pill-group .github-more-btn {
-    padding: 4px 5.5px 4px 4.5px;
+  .more-menu-btn {
+    padding: 4px 7.5px;
   }
   .layers-popover {
     left: 8px;
@@ -3872,6 +3994,12 @@ html[lang="en"] .genealogy-list li {
   .more-popover {
     right: 8px;
     width: min(268px, calc(100vw - 16px));
+  }
+  .more-pop-divider.more-mobile-only {
+    display: block;
+  }
+  .more-pop-link.more-mobile-only {
+    display: flex;
   }
   /* Collapsible 34x34px Search Button on Mobile (<= 640px) */
   #map-search-box:not(:focus-within):not(.is-expanded) {
@@ -3975,7 +4103,8 @@ html[lang="en"] .genealogy-list li {
   #scrubber-rail-wrap {
     grid-column: 1 / -1;
     grid-row: 2;
-    padding-top: 0;
+    padding: 0 8px;
+    box-sizing: border-box;
     width: 100%;
   }
   #scrubber-track {
@@ -4077,7 +4206,8 @@ html[lang="en"] .genealogy-list li {
 
 #grp-polities.has-polity-focus .polity-shape.is-focused {
   fill-opacity: 0.56 !important;
-  stroke-width: 2.6 !important;
+  stroke-width: 2.1 !important;
+  stroke-opacity: 0.94 !important;
 }
 
 #grp-polities.has-polity-focus .polity-caption.is-focused,
@@ -4209,6 +4339,22 @@ html[lang="en"] .genealogy-list li {
   background: rgba(255, 248, 231, 0.85);
   box-shadow: 0 0 2px rgba(0, 0, 0, 0.45);
   pointer-events: none;
+}
+
+.band-phase-tick.is-silent-phase {
+  display: none;
+}
+
+#scrubber-dock.is-milestones-hidden .band-ev-dot {
+  display: none;
+}
+
+#scrubber-dock.is-milestones-hidden .band-phase-tick {
+  background: rgba(255, 250, 240, 0.56);
+}
+
+#scrubber-dock.is-milestones-hidden .band-phase-tick.is-silent-phase {
+  display: block;
 }
 
 /* #3 Stage Transition Ghost Diff Outline */
@@ -4386,8 +4532,11 @@ html[lang="en"] .genealogy-list li {
 }
 
 .canvas-reset-btn {
-  pointer-events: auto;
-  display: inline-flex;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(4px);
+  display: none;
   align-items: center;
   gap: 4.5px;
   padding: 5.5px 10px;
@@ -4400,7 +4549,21 @@ html[lang="en"] .genealogy-list li {
   font-size: 11.5px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s, transform 0.1s;
+  box-shadow: 0 2px 8px rgba(43, 38, 34, 0.08);
+  transition: opacity 0.18s ease, transform 0.18s ease, visibility 0s linear 0.18s, background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+#viewport-frame.is-camera-moved .canvas-reset-btn {
+  display: inline-flex;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition: opacity 0.18s ease, transform 0.18s ease, visibility 0s linear 0s, background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+#viewport-frame:not(.is-camera-moved) .user-location-btn {
+  border-radius: inherit;
 }
 
 .canvas-reset-btn:hover {
@@ -4408,7 +4571,7 @@ html[lang="en"] .genealogy-list li {
   color: var(--vermilion);
 }
 
-.canvas-reset-btn:active {
+#viewport-frame.is-camera-moved .canvas-reset-btn:active {
   transform: translateY(1px);
 }
 
@@ -4620,6 +4783,12 @@ html[lang="en"] #act-toggle-pane .tp-label {
   transition: opacity 0.25s ease;
 }
 
+#viewport-frame.has-person-overview-lines .region-shape,
+#viewport-frame.has-person-overview-lines .region-shape-casing {
+  opacity: 0.28;
+  transition: opacity 0.25s ease;
+}
+
 .journey-track-halo,
 .journey-track-thread,
 .journey-track-upcoming,
@@ -4642,10 +4811,21 @@ html[lang="en"] #act-toggle-pane .tp-label {
   stroke-width: 6.4px;
 }
 
+.journey-track-halo.is-overview {
+  stroke: rgba(251, 246, 236, 0.72);
+  stroke-width: 2.8px;
+}
+
 .journey-track-thread {
   stroke-width: 2.55px;
   stroke-dasharray: 8 3.8;
   opacity: 0.96;
+}
+
+.journey-track-thread.is-overview {
+  stroke-width: 1.5px;
+  stroke-dasharray: none;
+  opacity: 0.78;
 }
 
 .journey-track-upcoming {
@@ -5299,7 +5479,6 @@ html[lang="en"] #act-toggle-pane .tp-label {
   }
 
   #map-key:not(.is-mobile-expanded) .key-heading,
-  #map-key:not(.is-mobile-expanded) .key-note,
   #map-key:not(.is-mobile-expanded) .key-corridors-grid,
   #map-key:not(.is-mobile-expanded) .key-neighbor-entry {
     display: none;
@@ -5387,64 +5566,6 @@ html[lang="en"] #act-toggle-pane .tp-label {
   }
 }
 
-.settlement-node .cap-hint-tag {
-  cursor: pointer;
-  pointer-events: all;
-}
-
-.settlement-node .cap-hint-inner {
-  animation: capWhisperFloat 3.2s ease-in-out infinite;
-}
-
-@keyframes capWhisperFloat {
-  0%,
-  100% {
-    transform: translateY(0);
-    opacity: 0.94;
-  }
-  50% {
-    transform: translateY(1.2px);
-    opacity: 1;
-  }
-}
-
-.settlement-node .cap-hint-stem {
-  stroke: rgba(181, 69, 47, 0.55);
-  stroke-width: 0.9;
-  stroke-dasharray: 1.5 1.5;
-  pointer-events: none;
-}
-
-.settlement-node .cap-hint-bg {
-  fill: rgba(251, 246, 235, 0.95);
-  stroke: rgba(181, 69, 47, 0.52);
-  stroke-width: 0.9;
-  filter: drop-shadow(0 2px 4px rgba(43, 38, 34, 0.15));
-  transition: fill 0.15s ease, stroke 0.15s ease;
-}
-
-.settlement-node .cap-hint-text {
-  font-family: var(--serif-stack);
-  font-size: 7.6px;
-  font-weight: 700;
-  fill: #7a2617;
-  letter-spacing: 0.02em;
-  dominant-baseline: central;
-  text-anchor: middle;
-  transition: fill 0.15s ease;
-}
-
-.settlement-node:hover .cap-hint-bg,
-.settlement-node .cap-hint-tag:hover .cap-hint-bg {
-  fill: var(--vermilion);
-  stroke: var(--vermilion);
-}
-
-.settlement-node:hover .cap-hint-text,
-.settlement-node .cap-hint-tag:hover .cap-hint-text {
-  fill: #fffaf2;
-}
-
 @media (max-width: 900px) {
   #milestone-balloon {
     max-width: min(268px, calc(100vw - 20px));
@@ -5487,8 +5608,7 @@ html[lang="en"] #act-toggle-pane .tp-label {
   #viewport-frame.has-active-journey #milestone-balloon,
   #viewport-frame.has-active-challenge #milestone-balloon,
   #viewport-frame.has-active-genealogy #milestone-balloon,
-  #workspace-body.is-mobile-chronicle-open #milestone-balloon,
-  #viewport-frame:has(#milestone-balloon:not(.is-hidden)) .settlement-node .cap-hint-tag {
+  #workspace-body.is-mobile-chronicle-open #milestone-balloon {
     display: none !important;
   }
 }
@@ -5557,20 +5677,21 @@ html[lang="en"] #act-toggle-pane .tp-label {
   /* Slim down non-scaling border & corridor strokes by ~38% so lines don't overpower text */
   .polity-shape,
   #atlas-svg.terrain-active .polity-shape {
-    stroke-width: 1.18;
-    stroke-opacity: 0.86;
+    stroke-width: 1.1;
+    stroke-opacity: 0.66;
   }
 
   .polity-shape.rival,
   #atlas-svg.terrain-active .polity-shape.rival {
     stroke-width: 0.95;
-    stroke-opacity: 0.84;
+    stroke-opacity: 0.62;
   }
 
   .polity-shape.protectorate,
   #atlas-svg.terrain-active .polity-shape.protectorate {
     stroke-width: 0.85;
     stroke-dasharray: 4 2.5;
+    stroke-opacity: 0.66;
   }
 
   .polity-shape.neighbor,

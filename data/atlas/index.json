@@ -1,8 +1,7 @@
 {
   "boot": [
     "neighbors",
-    "s_zhanguo_a",
-    "s_qin_a"
+    "s_zhanguo_a"
   ],
   "order": [
     "neighbors",
@@ -24,6 +23,7 @@
     "s_dongjin_c",
     "s_dongjin_d",
     "s_ming_a",
+    "s_ming_1409",
     "s_ming_b0",
     "s_ming_b",
     "s_ming_c",
@@ -40,6 +40,7 @@
     "s_qing_a",
     "s_qing_b",
     "s_qing_c",
+    "s_qing_1755",
     "s_qing_d",
     "s_qing_e",
     "s_qing_f",
@@ -55,6 +56,7 @@
     "s_tang_wz2",
     "s_tang_b",
     "s_xihan_a",
+    "s_xihan_a2",
     "s_xihan_b",
     "s_xihan_c",
     "s_xijin",
@@ -91,6 +93,7 @@
     "s_tang_a4b",
     "s_tang_a5z",
     "s_tang_a5y",
+    "s_tang_726",
     "s_tang_a5",
     "s_tang_b1",
     "s_tang_c",
@@ -114,6 +117,7 @@
     "s_nansong_d",
     "s_nansong_e",
     "s_nansong_g",
+    "s_yuan_1351",
     "s_yuan_b",
     "s_ming_a0",
     "s_qing_a2",
@@ -127,6 +131,7 @@
     "s_wudai_c2",
     "s_wudai_e2",
     "s_dongjin_a0",
+    "s_dongjin_327",
     "s_dongjin_b2",
     "s_dongjin_373",
     "s_tang_b0a",
@@ -139,6 +144,7 @@
     "s_donghan_f",
     "s_sui_d",
     "s_tang_0",
+    "s_tang_0b",
     "s_yuan_c",
     "s_ming_0a",
     "s_ming_0b",
@@ -210,6 +216,9 @@
     "s_tang_840",
     "s_yuan_1335",
     "s_yuan_1367",
-    "s_wudai_955"
+    "s_wudai_955",
+    "s_roc_1938",
+    "s_nansong_e0",
+    "s_nansong_f"
   ]
 }

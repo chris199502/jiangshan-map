@@ -12,6 +12,31 @@
   let escHtml = null;
   let SVG_ICONS = null;
 
+  const PLACE_TOPIC_SLUGS = {
+    西安: 'xian',
+    洛阳: 'luoyang',
+    北京: 'beijing',
+    南京: 'nanjing',
+    开封: 'kaifeng',
+    成都: 'chengdu',
+    杭州: 'hangzhou',
+    荆州: 'jingzhou',
+    扬州: 'yangzhou',
+    襄阳: 'xiangyang',
+    广州: 'guangzhou',
+    太原: 'taiyuan',
+    大同: 'datong',
+    武威: 'wuwei',
+    敦煌: 'dunhuang',
+    长沙: 'changsha',
+    福州: 'fuzhou',
+    汉中: 'hanzhong',
+    苏州: 'suzhou',
+    桂林: 'guilin',
+    大理: 'dali',
+    拉萨: 'lhasa',
+  };
+
   class AtlasTraceMixin {
     // ---------------- Place Genealogy (Trace Place) ----------------
     toggleGenealogySheetExpand(force) {
@@ -69,7 +94,7 @@
         this.grpJourney.innerHTML = '';
       }
       const vf = this._id('viewport-frame');
-      if (vf) vf.classList.remove('has-active-person');
+      if (vf) vf.classList.remove('has-active-person', 'has-person-overview-lines');
       const kickerEl = this._id('txt-genealogy-kicker');
       if (kickerEl) {
         kickerEl.textContent = this.uiStr('trace_kicker', '点地溯源 · 古今政区沿革');
@@ -194,17 +219,23 @@
       return this._collectPersonEvents(adhoc).length ? adhoc : null;
     }
 
-    _formatPersonSpan(span, isAdhoc = false) {
+    // `unknown` ('birth' | 'death' | 'both') marks years the sources do not record: the number
+    // stays in the data to place the person on the timeline, but is shown as a question mark.
+    _formatPersonSpan(span, isAdhoc = false, unknown = '') {
       if (!span || isAdhoc || span.length < 2) return '';
       const [y0, y1] = span;
       if (y0 === undefined || y1 === undefined) return '';
+      const noBirth = unknown === 'birth' || unknown === 'both';
+      const noDeath = unknown === 'death' || unknown === 'both';
       if (this.locale === 'en') {
-        if (y0 <= 0 && y1 <= 0) return ` (${-y0}–${-y1} BCE)`;
-        if (y0 <= 0 && y1 > 0) return ` (${-y0} BCE – ${y1} CE)`;
-        return ` (${y0}–${y1})`;
+        const b = noBirth ? '?' : Math.abs(y0);
+        const d = noDeath ? '?' : Math.abs(y1);
+        if (y0 <= 0 && y1 <= 0) return ` (${b}–${d} BCE)`;
+        if (y0 <= 0 && y1 > 0) return ` (${b}${noBirth ? '' : ' BCE'} – ${d}${noDeath ? '' : ' CE'})`;
+        return ` (${b}–${d})`;
       }
       const fZh = (y) => (y <= 0 ? `前${-y}` : `${y}`);
-      return `（${fZh(y0)}—${fZh(y1)}）`;
+      return `（${noBirth ? '？' : fZh(y0)}—${noDeath ? '？' : fZh(y1)}）`;
     }
 
     _tailorPersonEvent(profile, tokens, d, year, rawSite, rawSiteEn, rawCoord, textZh, textEn, src) {
@@ -286,6 +317,7 @@
                 const bare = toCorePlace(sp);
                 return (
                   (bare.length >= 2 && personSubClause.includes(bare)) ||
+                  (bare.length === 1 && personSubClause.includes(bare + '城')) ||
                   (sp.length >= 4 && personSubClause.includes(sp.slice(-3)))
                 );
               })
@@ -597,7 +629,7 @@
           if (hasJourneyStops && m.year >= jMinY && m.year <= jMaxY && !byTag) {
             const jHit = raw.find((r) => r.src === 'J' && r.year === m.year);
             if (jHit) {
-              if (m.isMapChange) jHit.isMapChange = true;
+              if (this._isPhaseChangeYear(d, m.year)) jHit.isMapChange = true;
               if (!jHit.milestone) jHit.milestone = m;
             }
             continue;
@@ -646,7 +678,7 @@
             modernEn: '',
             textZh: tailored.textZh,
             textEn: tailored.textEn,
-            isMapChange: Boolean(m.isMapChange),
+            isMapChange: this._isPhaseChangeYear(d, m.year),
             byPersonsTag: byTag,
             milestone: m,
             prio: 2,
@@ -1728,7 +1760,11 @@
     _renderPersonPinsOverlay() {
       if (!this.grpJourney) return;
       this.grpJourney.innerHTML = '';
-      if (!this.activePerson) return;
+      const vf = this._id('viewport-frame');
+      if (!this.activePerson) {
+        if (vf) vf.classList.remove('has-person-overview-lines');
+        return;
+      }
 
       const { events, tracks, isMulti, profile } = this.activePerson;
       const isStory = Boolean(profile && profile.isStory);
@@ -1877,6 +1913,7 @@
             ox: 0,
             oy: 0,
             ringR: 0,
+            canonicalIdx: i,
             isPrimary: true,
             isMultiCanonical: true,
             isSoloCanonical: true,
@@ -1895,6 +1932,7 @@
             ox: 0,
             oy: 0,
             ringR: 0,
+            canonicalIdx: canonicalSolo,
             isPrimary: i === canonicalSolo,
             isMultiCanonical: true,
             isSoloCanonical: i === canonicalSolo,
@@ -1968,7 +2006,68 @@
           this.locale === 'en' ? labelEn || this.trTerm(labelZh) : this._zh(labelZh)
         );
       };
-      if (!isMulti) {
+      const getSoloPinCoord = (idx) => {
+        const cl = clusters[idx];
+        return cl && typeof cl.canonicalIdx === 'number' && events[cl.canonicalIdx]
+          ? events[cl.canonicalIdx].coord
+          : events[idx].coord;
+      };
+      const isCuratedJourney = Boolean(profile && (profile.journeyKey || profile.isRelic));
+      let hasOverviewLines = false;
+      if (curIdx < 0 && !isMulti && !isStory && isCuratedJourney) {
+        const segments = [];
+        let prevIdx = -1;
+        let legCount = 0;
+        for (let i = 0; i < events.length; i++) {
+          const nextEv = events[i];
+          if (!nextEv || !Array.isArray(nextEv.coord)) continue;
+          if (prevIdx < 0) {
+            prevIdx = i;
+            continue;
+          }
+          const prevEv = events[prevIdx];
+          const fromPinCoord = getSoloPinCoord(prevIdx);
+          const toPinCoord = getSoloPinCoord(i);
+          if (
+            Math.hypot(fromPinCoord[0] - toPinCoord[0], fromPinCoord[1] - toPinCoord[1]) <= 0.08
+          ) {
+            prevIdx = i;
+            continue;
+          }
+          const keepsCuratedLeg =
+            Boolean(nextEv.via || nextEv.fromCoord) &&
+            nextEv.prevStopCoord &&
+            Math.hypot(
+              prevEv.coord[0] - nextEv.prevStopCoord[0],
+              prevEv.coord[1] - nextEv.prevStopCoord[1]
+            ) < 1.2;
+          let viaPts = keepsCuratedLeg && Array.isArray(nextEv.via) ? nextEv.via.slice() : null;
+          if (
+            keepsCuratedLeg &&
+            Array.isArray(nextEv.fromCoord) &&
+            Math.hypot(nextEv.fromCoord[0] - fromPinCoord[0], nextEv.fromCoord[1] - fromPinCoord[1]) >
+              0.45
+          ) {
+            viaPts = [nextEv.fromCoord, ...(viaPts || [])];
+          }
+          const segBias = legCount % 2 === 0 ? 1.8 : -1.8;
+          const segInfo = this._buildJourneySegmentInfo(
+            fromPinCoord,
+            toPinCoord,
+            viaPts && viaPts.length ? viaPts : null,
+            segBias
+          );
+          if (segInfo) {
+            segments.push({ ...segInfo, toIdx: i });
+            legCount++;
+          }
+          prevIdx = i;
+        }
+        if (segments.length) {
+          hasOverviewLines = true;
+          this._renderCartographicTrajectory(segments, -1, '#ad3422', false);
+        }
+      } else if (!isMulti) {
         if (curIdx >= 0 && curEv) {
           if (soloOriginCoord) {
             const prevEv = !isStory && curIdx > 0 ? events[curIdx - 1] : null;
@@ -2052,6 +2151,7 @@
           }
         }
       }
+      if (vf) vf.classList.toggle('has-person-overview-lines', hasOverviewLines);
 
       // Deduplicate city labels so repeated visits to the same city only print its name once
       const labelOwnerByIdx = new Set();
@@ -2272,6 +2372,24 @@
             this.locale === 'en' ? ev.siteEn || this.trTerm(ev.siteZh) : this._zh(ev.siteZh);
           const baseSite = fullLbl.replace(/\s*[（(][^）)]*[）)]\s*/g, '').trim() || fullLbl;
           let compactLbl = isCur ? fullLbl : baseSite;
+          if (isStory && isStepOrigin && curEv) {
+            if (idx === stepOriginIdx && (curEv.fromLabelZh || curEv.fromLabelEn)) {
+              compactLbl =
+                this.locale === 'en'
+                  ? curEv.fromLabelEn || fullLbl
+                  : this._zh(curEv.fromLabelZh || fullLbl);
+            } else if (Array.isArray(curEv.prongs)) {
+              const matchPr = curEv.prongs.find(
+                (p) => p && p.fromStopIdx === idx && (p.fromLabelZh || p.fromLabelEn)
+              );
+              if (matchPr) {
+                compactLbl =
+                  this.locale === 'en'
+                    ? matchPr.fromLabelEn || fullLbl
+                    : this._zh(matchPr.fromLabelZh || fullLbl);
+              }
+            }
+          }
           if (isPeerSync && syncPeersAtIdx) {
             const peerNames = syncPeersAtIdx
               .map((a) => (this.locale === 'en' ? a.profile.en : this._zh(a.profile.zh)))
@@ -2422,7 +2540,7 @@
             });
           });
         } else {
-          const spanStr = this._formatPersonSpan(profile.span, isAdhoc);
+          const spanStr = this._formatPersonSpan(profile.span, isAdhoc, profile.spanUnknown);
           headingEl.textContent = `${isEn ? profile.en : profile.zh}${spanStr}`;
         }
       }
@@ -2473,7 +2591,8 @@
                   Math.min(100 - leftPct, ((span[1] - span[0]) / totalW) * 100)
                 );
                 const pName = escHtml(isEn ? tr.profile.en : tr.profile.zh);
-                const sLbl = `${fmtYrShort(span[0])}—${fmtYrShort(span[1])}`;
+                const u = tr.profile.spanUnknown || '';
+                const sLbl = `${u === 'birth' || u === 'both' ? '?' : fmtYrShort(span[0])}—${u === 'death' || u === 'both' ? '?' : fmtYrShort(span[1])}`;
                 return (
                   `<div class="mp-span-row">` +
                   `<span class="mp-span-name" style="color:${tr.color}">${pName}</span>` +
@@ -2599,11 +2718,24 @@
                 isEn ? 'Filter to shared encounters only' : '仅看多人同途交汇节点'
               }">${isEn ? `Shared ${sameTimeCount}` : `同途 ${sameTimeCount}`}</button>`
             : '';
+        const tSlug = !isMulti
+          ? profile.isStory
+            ? `story-${profile.key}`
+            : profile.journeyKey
+              ? `journey-${profile.journeyKey}`
+              : profile.isRelic || (profile.evCount || 0) >= 5
+                ? `person-${profile.key}`
+                : ''
+          : '';
+        const topicLinkBtn = tSlug
+          ? `<a class="topic-inline-link" href="topics/${escHtml(tSlug)}.html" target="_blank" rel="noopener" title="${isEn ? 'Topic guide' : '查阅专题图志'}">${isEn ? 'Guide' : '图志'}</a>`
+          : '';
         subEl.innerHTML =
           `<span>${summaryTxt}</span>` +
           `<span class="person-sub-actions">` +
           `${returnStoryBtn}` +
           `${sharedFilterBtn}` +
+          `${topicLinkBtn}` +
           `<button type="button" class="gen-filter-pill${
             curIdx < 0 ? ' is-active' : ''
           }" id="act-person-overview">${isEn ? 'Overview' : '全图总览'}</button>` +
@@ -2972,6 +3104,7 @@
           desc: this.locale === 'en' ? bestCity.descEn : bestCity.descZh,
           tagEn: bestCity.tagEn,
           descEn: bestCity.descEn,
+          topicSlug: PLACE_TOPIC_SLUGS[bestCity.modern] || '',
         };
       }
 
@@ -3184,11 +3317,28 @@
         return false;
       };
 
+      // Two seats can lie within one radius (Yangzhou and Zhenjiang are 21 km apart across the
+      // Yangtze). An event pinned on another known city, and at least twice as far from here,
+      // is that city's. Successive sites of one city (范阳, 大都, 北平) are not "another", nor
+      // are the posts and camps around it (陈桥驿), which are not settlements of any period.
+      this._everySettlement = this._everySettlement || this.dynasties.flatMap((dy) => dy.settlements || []);
+      const onAnotherCity = (c) => {
+        const other = this._findNearestSettlement(this._everySettlement, c[0], c[1], 12);
+        if (!other) return false;
+        const km = (p) => this.projector.greatCircleKm(p, other.s.coord);
+        if (km([lng, lat]) <= 15 || (nearCity && km(nearCity.coord) <= 15)) return false;
+        return other.km * 2 < this.projector.greatCircleKm([lng, lat], c);
+      };
+      const isNearby = (c, maxKm) => isCloseCoord(c, maxKm) && !onAnotherCity(c);
+
       // 1. Dynasty milestones
       for (const m of d.milestones || []) {
         const mCoords = this._milestoneCoords(m);
-        const veryClose = mCoords.some((mc) => isCloseCoord(mc, 28));
-        const siteMatch = matchesSiteName(m.site);
+        const veryClose = mCoords.some((mc) => isNearby(mc, 28));
+        // Guard site-name matching by coordinate proximity so historical homonyms
+        // (e.g. Northern Song 南京应天府 at Shangqiu vs. Jiangsu Nanjing) do not leak across regions.
+        const siteMatch =
+          matchesSiteName(m.site) && (!mCoords.length || mCoords.some((mc) => isCloseCoord(mc, 100)));
         if (siteMatch || veryClose || (!nearCity && mCoords.some((mc) => isCloseCoord(mc, 48)))) {
           results.push({
             year: m.year,
@@ -3211,7 +3361,7 @@
           const inDynSpan = st.year >= d.fromYear && st.year <= d.toYear;
           if (!inDynSpan && j.dynastyKey !== d.key) return;
           if (j.key === 'zhugeliang' && !inDynSpan) return;
-          if (isCloseCoord(st.coord, 45) && !results.some((r) => r.year === st.year)) {
+          if (isNearby(st.coord, 45) && !results.some((r) => r.year === st.year)) {
             // Descriptions that already name the person ("黄河决口逼城，苏轼……") need no prefix.
             const descZh = st.descZh.split(/[；。]/)[0];
             const descEn = `${st.descEn.split('.')[0]}.`;
@@ -3249,7 +3399,7 @@
           ? (lm.dynastyKey === d.key || (lm.dynastyKey === 'nanbeichao' && d.key === 'nanbei'))
           : (lm.year >= d.fromYear && lm.year <= d.toYear);
         if (!dynMatch) continue;
-        if (isCloseCoord(lm.coord, 45)) {
+        if (isNearby(lm.coord, 45)) {
           const dup = results.some((r) =>
             r.fromLandmark
               ? r.year === lm.year && sharesCjkBigram(r.milestone && r.milestone.headline, lm.zh)
@@ -3440,7 +3590,7 @@
       return best;
     }
 
-    _resolveEraPlaceAt(lng, lat, d, snap, modernLoc, closestOverall) {
+    _resolveEraPlaceAt(lng, lat, d, snap, modernLoc, closestOverall, year) {
       const loc = modernLoc || this._resolveModernLocationAt(lng, lat);
       const closest =
         closestOverall !== undefined
@@ -3474,6 +3624,14 @@
         }
       }
       let near = this._findNearestSettlement(d && d.settlements, lng, lat, 175);
+      // One site can carry an entry per name (江宁 → 天京 → 江宁): take the one on the map that year.
+      const offMap = (s) =>
+        (s.appear !== undefined && year < s.appear) || (s.vanish !== undefined && year >= s.vanish);
+      if (near && year !== undefined && offMap(near.s)) {
+        const [x, y] = near.s.coord;
+        const twin = d.settlements.find((s) => s.coord[0] === x && s.coord[1] === y && !offMap(s));
+        if (twin) near = { s: twin, km: near.km };
+      }
       if (
         d &&
         (d.key === 'roc' || d.key === 'prc') &&
@@ -3941,7 +4099,7 @@
         const targetYear = isCurDyn ? this.year : d.focusYear;
         const snapKey = this._resolveSnapKey(d, targetYear);
         const snap = this.snapshots[snapKey] || { polities: [], regions: [], prefectures: [] };
-        const eraHit = this._resolveEraPlaceAt(lng, lat, d, snap, modernLoc, closestOverall);
+        const eraHit = this._resolveEraPlaceAt(lng, lat, d, snap, modernLoc, closestOverall, targetYear);
         const polityHit = eraHit.polity;
         const near = eraHit.near;
         const adminHits = [];
@@ -4010,6 +4168,13 @@
 
       const renderSubAndList = () => {
         const subEl = this._id('genealogy-sub');
+        const loreBanner = this._resolvePlaceLoreBanner(
+          lng,
+          lat,
+          matchedPass,
+          identityModern,
+          rowsData
+        );
         const capInfo =
           capDynasties > 0
             ? this.locale === 'en'
@@ -4030,7 +4195,17 @@
                 : retP.labelZh || (retP.profile && retP.profile.zh) || ''
             )}</button>`
           : '';
-        if (totalEvents > 0 || retBtnHtml) {
+        const placeSlug =
+          !matchedPass && loreBanner && loreBanner.topicSlug
+            ? loreBanner.topicSlug
+            : '';
+        const isEnGen = this.locale === 'en';
+        const placeTopicHtml = placeSlug
+          ? `<a class="topic-inline-link" href="topics/place-${escHtml(placeSlug)}.html" target="_blank" rel="noopener" title="${
+              isEnGen ? 'Place guide' : '查阅地区图志'
+            }">${isEnGen ? 'Guide' : '图志'}</a>`
+          : '';
+        if (totalEvents > 0 || retBtnHtml || placeTopicHtml) {
           const btnLabel = this.genealogyEventsOnly
             ? this.locale === 'en'
               ? 'All Dynasties'
@@ -4046,7 +4221,7 @@
               : '';
           subEl.innerHTML =
             `<span>${coordText}</span>` +
-            `<span class="person-sub-actions">${retBtnHtml}${filterHtml}</span>`;
+            `<span class="person-sub-actions">${retBtnHtml}${placeTopicHtml}${filterHtml}</span>`;
           const retBtn = this._id('act-return-person');
           if (retBtn && retP) {
             retBtn.addEventListener('click', (e) => {
@@ -4067,13 +4242,6 @@
         }
 
         const loreEl = this._id('genealogy-lore');
-        const loreBanner = this._resolvePlaceLoreBanner(
-          lng,
-          lat,
-          matchedPass,
-          identityModern,
-          rowsData
-        );
         if (loreEl) {
           if (loreBanner && !this.genealogyEventsOnly) {
             loreEl.innerHTML =
@@ -4345,20 +4513,26 @@
 
       if (curIdx < 0) {
         const fullD = segments.map((s) => s.d).join(' ');
-        applyDim(this._svgNode('path', { d: fullD, class: 'journey-track-halo' }, this.grpJourney));
         applyDim(
           this._svgNode(
             'path',
-            { d: fullD, class: 'journey-track-thread', stroke: accentColor },
+            { d: fullD, class: 'journey-track-halo is-overview' },
+            this.grpJourney
+          )
+        );
+        applyDim(
+          this._svgNode(
+            'path',
+            { d: fullD, class: 'journey-track-thread is-overview', stroke: accentColor },
             this.grpJourney
           )
         );
         const placedMarks = [];
         for (const seg of segments) {
-          if (seg.chord < 20) continue;
-          if (placedMarks.some(([px, py]) => Math.hypot(px - seg.mx, py - seg.my) < 15)) continue;
+          if (seg.chord < 28) continue;
+          if (placedMarks.some(([px, py]) => Math.hypot(px - seg.mx, py - seg.my) < 22)) continue;
           placedMarks.push([seg.mx, seg.my]);
-          appendChevron(seg, '');
+          appendChevron(seg, 'is-muted');
         }
         return;
       }

@@ -143,6 +143,32 @@ async function runSearchRuntimeSuite(ctx) {
           `Famous city "${cityQ}" must rank #1 as kind="city" above same-named era, got ${JSON.stringify(cHits[0])}`
         );
       }
+      // Every indexed city entry jumps to a year when its settlement is drawn (appear <= year < vanish)
+      for (const item of ctrl._ensureSearchIndex()) {
+        if (item.kind !== 'city') continue;
+        const s = item.dynasty.settlements.find(
+          (st) => st.ancient === item.titleZh && st.coord === item.coord
+        );
+        assert(
+          s &&
+            (s.vanish === undefined || item.year < s.vanish) &&
+            (s.appear === undefined || item.year >= s.appear),
+          `Indexed city "${item.titleZh}" (${item.dynasty.key}) vanishes in ${s && s.vanish} / appears in ${s && s.appear} but jumps to ${item.year}`
+        );
+      }
+      for (const vanishedQ of ['襄国', '平阳', '棘城', '东阳城', '交州', '夏州']) {
+        const vHit = ctrl
+          ._queryQuickSearch(vanishedQ)
+          .find((h) => h.kind === 'city' && h.titleZh === vanishedQ);
+        assert(vHit, `Expected city search hit for "${vanishedQ}"`);
+        const vSettlement = vHit.dynasty.settlements.find((s) => s.ancient === vHit.titleZh);
+        assert(
+          vSettlement &&
+            vHit.year < vSettlement.vanish &&
+            (vSettlement.appear === undefined || vHit.year >= vSettlement.appear),
+          `City "${vanishedQ}" vanishes in ${vSettlement && vSettlement.vanish} but its search hit jumps to ${vHit.year}`
+        );
+      }
       for (const explicitEraQ of ['长安元年', '建康元年', '绍兴元年', '大同元年', '建安元年']) {
         const eHits = ctrl._queryQuickSearch(explicitEraQ);
         assert(
@@ -419,8 +445,13 @@ async function runSearchRuntimeSuite(ctx) {
           assert.strictEqual(sandbox.location.search, '?year=450&polity=beiwei&trace=108.940,34.260&terrain=0', 'A place card opened on top of a profile must be kept alongside ?polity=');
           ctrl.activePolity = null;
 
-          const indexHtml = require('fs').readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-          assert(/data-cf-beacon='[^']*"spa":\s*false/.test(indexHtml), 'Cloudflare beacon must keep "spa": false, or every URL state write is counted as a pageview');
+          const beaconCorpus =
+            require('fs').readFileSync(path.join(ROOT, 'index.html'), 'utf8') +
+            require('fs').readFileSync(path.join(JS_DIR, 'atlas_track.js'), 'utf8');
+          assert(
+            /(?:data-cf-beacon='[^']*|setAttribute\('data-cf-beacon',\s*'[^']*)"spa":\s*false/.test(beaconCorpus),
+            'Cloudflare beacon must keep "spa": false, or every URL state write is counted as a pageview'
+          );
 
           Object.assign(ctrl, { activePerson: { profiles: [{ key: 'libai' }, { key: 'dufu' }] }, activePersonEventIdx: 3 });
           ctrl._writeUrlState();
@@ -625,6 +656,115 @@ async function runSearchRuntimeSuite(ctx) {
             ctrl._loreDetailPromise = savedLorePromise;
             ctrl._loadScriptOnce = savedLoadScriptOnce;
             ctrl.searchIndex = null;
+          }
+        }
+        // 5b. Failed _ensureFullSnapshots() must stay retryable instead of permanently setting _fullSnapshotsLoaded
+        {
+          const savedFullLoaded = ctrl._fullSnapshotsLoaded;
+          const savedFullPromise = ctrl._fullSnapshotsPromise;
+          const savedFullSentinel = sandbox.window.ATLAS_FULL_SNAPSHOTS_LOADED;
+          const savedSnapshots = sandbox.window.ATLAS_SNAPSHOTS;
+          const savedLoadScriptOnce = ctrl._loadScriptOnce;
+          let calls = 0;
+          try {
+            ctrl._fullSnapshotsLoaded = false;
+            ctrl._fullSnapshotsPromise = null;
+            sandbox.window.ATLAS_FULL_SNAPSHOTS_LOADED = false;
+            sandbox.window.ATLAS_SNAPSHOTS = { s_zhanguo_a: savedSnapshots.s_zhanguo_a };
+            ctrl._loadScriptOnce = () => {
+              calls += 1;
+              if (calls >= 2) {
+                sandbox.window.ATLAS_FULL_SNAPSHOTS_LOADED = true;
+                sandbox.window.ATLAS_SNAPSHOTS = savedSnapshots;
+              }
+              return Promise.resolve();
+            };
+            await ctrl._ensureFullSnapshots();
+            assert.strictEqual(
+              ctrl._fullSnapshotsLoaded,
+              false,
+              '_ensureFullSnapshots() must not set _fullSnapshotsLoaded when script load failed'
+            );
+            assert.strictEqual(
+              ctrl._fullSnapshotsPromise,
+              null,
+              '_ensureFullSnapshots() must clear _fullSnapshotsPromise on failed load so later calls retry'
+            );
+            await ctrl._ensureFullSnapshots();
+            assert.strictEqual(calls, 2, '_ensureFullSnapshots() must retry after a failed load');
+            assert.strictEqual(
+              ctrl._fullSnapshotsLoaded,
+              true,
+              '_ensureFullSnapshots() must mark _fullSnapshotsLoaded after retry succeeds'
+            );
+          } finally {
+            sandbox.window.ATLAS_FULL_SNAPSHOTS_LOADED = savedFullSentinel;
+            sandbox.window.ATLAS_SNAPSHOTS = savedSnapshots;
+            ctrl._fullSnapshotsLoaded = savedFullLoaded;
+            ctrl._fullSnapshotsPromise = savedFullPromise;
+            ctrl._loadScriptOnce = savedLoadScriptOnce;
+          }
+        }
+        // 5c. Per-dynasty snapshot chunk loading, failure non-caching, and retryability
+        {
+          const savedFullLoaded = ctrl._fullSnapshotsLoaded;
+          const savedFullPromise = ctrl._fullSnapshotsPromise;
+          const savedLoadedChunks = ctrl._loadedDynastyChunks;
+          const savedChunkPromises = ctrl._dynastyChunkPromises;
+          const savedSnapCache = ctrl.snapshotCache;
+          const savedCtrlSnapshots = ctrl.snapshots;
+          const savedFullSentinel = sandbox.window.ATLAS_FULL_SNAPSHOTS_LOADED;
+          const savedWinSnapshots = sandbox.window.ATLAS_SNAPSHOTS;
+          const savedLoadScriptOnce = ctrl._loadScriptOnce;
+          const requestedSrcs = [];
+          try {
+            ctrl._fullSnapshotsLoaded = false;
+            ctrl._fullSnapshotsPromise = null;
+            ctrl._loadedDynastyChunks = new Set();
+            ctrl._dynastyChunkPromises = {};
+            ctrl.snapshotCache = {};
+            const tangSnap = savedWinSnapshots.s_tang_a;
+            const bootOnly = { s_zhanguo_a: savedWinSnapshots.s_zhanguo_a };
+            sandbox.window.ATLAS_FULL_SNAPSHOTS_LOADED = false;
+            sandbox.window.ATLAS_SNAPSHOTS = bootOnly;
+            ctrl.snapshots = bootOnly;
+            ctrl._loadScriptOnce = (src) => {
+              requestedSrcs.push(src);
+              if (requestedSrcs.length >= 2) {
+                bootOnly.s_tang_a = tangSnap;
+              }
+              return Promise.resolve();
+            };
+            const firstRes = await ctrl._fetchSnapshot('s_tang_a');
+            assert.strictEqual(requestedSrcs.length, 1, '_fetchSnapshot must request dynasty chunk once');
+            assert(
+              /^js\/snapshots\/tang\.js(\?|$)/.test(requestedSrcs[0]),
+              `_fetchSnapshot("s_tang_a") must request js/snapshots/tang.js, got ${requestedSrcs[0]}`
+            );
+            assert.strictEqual(
+              ctrl.snapshotCache.s_tang_a,
+              undefined,
+              '_fetchSnapshot() must not cache empty placeholder in snapshotCache on failed load'
+            );
+            assert.strictEqual(firstRes.polities.length, 0);
+            const secondRes = await ctrl._fetchSnapshot('s_tang_a');
+            assert.strictEqual(requestedSrcs.length, 2, '_fetchSnapshot() must retry after failed dynasty chunk load');
+            assert.strictEqual(secondRes, tangSnap, '_fetchSnapshot() must return decoded tang snapshot after retry');
+            assert.strictEqual(
+              ctrl._fullSnapshotsLoaded,
+              false,
+              'loading a single dynasty chunk must not falsely mark _fullSnapshotsLoaded = true'
+            );
+          } finally {
+            sandbox.window.ATLAS_FULL_SNAPSHOTS_LOADED = savedFullSentinel;
+            sandbox.window.ATLAS_SNAPSHOTS = savedWinSnapshots;
+            ctrl.snapshots = savedCtrlSnapshots;
+            ctrl.snapshotCache = savedSnapCache;
+            ctrl._loadedDynastyChunks = savedLoadedChunks;
+            ctrl._dynastyChunkPromises = savedChunkPromises;
+            ctrl._fullSnapshotsLoaded = savedFullLoaded;
+            ctrl._fullSnapshotsPromise = savedFullPromise;
+            ctrl._loadScriptOnce = savedLoadScriptOnce;
           }
         }
         // 6. WebMCP (navigator.modelContext) registration & Stdio MCP server (scripts/mcp_server.js)
@@ -894,6 +1034,22 @@ async function runSearchRuntimeSuite(ctx) {
             qCtrl.stopChallenge();
             assert.strictEqual(qCtrl.challenge, null);
           }
+          // A round must open on a year in which its place is still on the map
+          // (the map hides a settlement once year >= vanish).
+          qCtrl.locale = 'zh';
+          qCtrl.startChallenge();
+          for (const pick of qCtrl._challengeBaseTiers.flat()) {
+            const s = pick.settlement;
+            if (s.vanish === undefined) continue;
+            qCtrl.challenge.deck = [pick];
+            qCtrl.challenge.index = 0;
+            qCtrl.presentChallengeRound();
+            assert(
+              qCtrl.year < s.vanish && (s.appear === undefined || qCtrl.year >= s.appear),
+              `Quiz round for "${s.ancient}" (${pick.dynasty.key}) vanishes in ${s.vanish} but opens on ${qCtrl.year}`
+            );
+          }
+          qCtrl.stopChallenge();
         }
         assert.strictEqual(ctrl.trTerm('南郑'), 'Nanzheng');
         assert.strictEqual(ctrl.trTerm('刺史部'), 'Inspectorate Region');
@@ -1190,8 +1346,14 @@ async function runSearchRuntimeSuite(ctx) {
 
         ctrl.locale = 'en';
         const enChips = Array.from(ctrl._getSearchSampleQueries());
-        assert.deepStrictEqual(enChips, ["Chang'an", 'Chibi', 'Cao Cao', 'Li Bai, Du Fu, Gao Shi']);
+        // English chips are short enough not to ellipsize next to the "Quiz ›" link.
+        assert.deepStrictEqual(enChips, ["Chang'an", 'Chibi', 'Cao Cao', 'Li Bai, Du Fu']);
         assert.strictEqual(ctrl._queryQuickSearch('Cao Cao')[0].kind, 'person');
+        assert.strictEqual(ctrl._queryQuickSearch('Li Bai, Du Fu')[0].kind, 'multi_person');
+        assert(
+          ctrl._searchPlaceholder(false).length <= 28,
+          `English compact placeholder must fit the collapsed pill without ellipsis: ${ctrl._searchPlaceholder(false)}`
+        );
         const enPairHit = ctrl._queryQuickSearch('Li Bai, Du Fu, Gao Shi')[0];
         assert(
           enPairHit &&
@@ -1555,10 +1717,32 @@ async function runSearchRuntimeSuite(ctx) {
           cssSrc.includes('grid-template-rows: 1fr auto') &&
           cssSrc.includes('#workspace-body:not(.is-mobile-chronicle-open) #chronicle-pane .seat-row') &&
           cssSrc.includes('#workspace-body.is-mobile-chronicle-open #chronicle-pane #dynasty-seat') &&
-          cssSrc.includes('#viewport-frame:has(#milestone-balloon:not(.is-hidden)) .settlement-node .cap-hint-tag') &&
+          !appCode.includes('cap-hint-tag') &&
+          !cssSrc.includes('.cap-hint-tag') &&
           cssSrc.includes('#inp-map-search,\n  #inp-year {\n    font-size: 16px;') &&
           appCode.includes('if (!this._isMobileViewport()) searchInp.focus();'),
-        'css/style.css & js/app.js must use single-row collapsed mobile chronicle bar, prevent iOS Safari auto-zoom (#inp-map-search font-size: 16px), and avoid synchronous searchInp.focus() on mobile chip clicks'
+        'css/style.css & js/app.js must use single-row collapsed mobile chronicle bar, omit removed .cap-hint-tag, prevent iOS Safari auto-zoom (#inp-map-search font-size: 16px), and avoid synchronous searchInp.focus() on mobile chip clicks'
+      );
+
+      // Legend cleanup: deduplicate redundant stage year spans and omit redundant .key-note prose
+      assert.strictEqual(
+        ctrl._stripLegendCaptionYear('战国初期（前403—前331年 · 三家分晋、田氏代齐与魏霸中原）'),
+        '战国初期 · 三家分晋、田氏代齐与魏霸中原',
+        'ZH parenthesized date span must collapse cleanly in legend heading'
+      );
+      assert.strictEqual(
+        ctrl._stripLegendCaptionYear('Early Warring States (403–331 BCE: Partition of Jin, Tian Qi & Hegemony of Wei)'),
+        'Early Warring States · Partition of Jin, Tian Qi & Hegemony of Wei',
+        'EN parenthesized date span must collapse cleanly in legend heading'
+      );
+      assert.strictEqual(
+        ctrl._stripLegendCaptionYear('679 — 686 · 裴行俭复四镇：碎叶代焉耆为四镇之一'),
+        '裴行俭复四镇：碎叶代焉耆为四镇之一',
+        'Leading numeric date span must strip cleanly in legend heading'
+      );
+      assert(
+        !appCode.includes('key-note') && !cssSrc.includes('.key-note'),
+        'Legend must not render or style redundant .key-note prose'
       );
 
       // CUJ 43: Wu Zhou (武周, 690–705) Interregnum Snapshots, Shendu Luoyang Capital & Polity Profile
@@ -1634,6 +1818,11 @@ async function runSearchRuntimeSuite(ctx) {
         const revInspZh = ctrl.inspect({ year: 705, place: '洛阳' });
         assert.strictEqual(revInspZh.polity, '唐');
         assert.strictEqual(revInspZh.resolvedName, '东都洛阳');
+        // 江宁 and 天京 share one site: the nearest city is the one on the map that year.
+        const tianjingInsp = ctrl.inspect({ year: 1860, lng: 118.801, lat: 32.061 });
+        assert.strictEqual(tianjingInsp.nearestCity && tianjingInsp.nearestCity.ancient, '天京');
+        assert.strictEqual(Boolean(tianjingInsp.nearestCity && tianjingInsp.nearestCity.isCapital), true);
+        assert.strictEqual(ctrl.inspect({ year: 1870, lng: 118.801, lat: 32.061 }).nearestCity.ancient, '江宁');
 
         ctrl.locale = 'en';
         assert.strictEqual(ctrl.formatEraLabel(695, tangDyn), 'Wu Zhou · Wu Zetian');
@@ -1673,13 +1862,13 @@ async function runSearchRuntimeSuite(ctx) {
         ctrl.locale = 'zh';
       }
 
-      // Deep links (?year=383): the full snapshot bundle is preloaded from <head>, and while a
-      // snapshot is still downloading no other era's borders or key stay on screen.
+      // Deep links (?year=383): <head> avoids preloading the 786 KB monolithic bundle (per-dynasty
+      // chunks load on demand), and pending snapshots hide borders and the key until rendered.
       {
         assert(
-          /link\.href = 'js\/atlas_snapshots\.js\?v=[0-9a-f]{8}'/.test(indexHtml) &&
+          !/link\.href = 'js\/atlas_snapshots\.js/.test(indexHtml) &&
             indexHtml.indexOf('deeplink-boot') < indexHtml.indexOf('css/style.css'),
-          'index.html must preload the snapshot bundle for deep links before the stylesheet'
+          'index.html must mark deeplink-boot before the stylesheet without preloading monolithic atlas_snapshots.js'
         );
         const flags = () => {
           const set = new Set();
@@ -2284,7 +2473,7 @@ async function runSearchRuntimeSuite(ctx) {
             }
           }
         }
-        for (const bsKey of ['s_zhanguo_a', 's_qin_a']) {
+        for (const bsKey of ['s_zhanguo_a']) {
           for (const f of bootSnapshots[bsKey].polities || []) {
             assert(f.title !== '台湾原住民', `atlas_boot.js ${bsKey} still contains 台湾原住民`);
           }
@@ -2292,20 +2481,20 @@ async function runSearchRuntimeSuite(ctx) {
 
         const earlyMingSet = new Set([
           's_ming_0a', 's_ming_0b', 's_ming_0c', 's_ming_0d',
-          's_ming_a0', 's_ming_a', 's_ming_a2', 's_ming_b0',
+          's_ming_a0', 's_ming_a', 's_ming_1409', 's_ming_a2', 's_ming_b0',
         ]);
         const lateMingDutchSet = new Set(['s_ming_c0', 's_ming_c', 's_ming_c2']);
         const qingDutchSet = new Set(['s_qing_a00', 's_qing_a0']);
         const qingMingZhengSet = new Set(['s_qing_a0b', 's_qing_a1', 's_qing_a', 's_qing_a2']);
         const qingRuleSet = new Set([
-          's_qing_b1', 's_qing_b', 's_qing_c', 's_qing_d',
+          's_qing_b1', 's_qing_b', 's_qing_c', 's_qing_1755', 's_qing_d',
           's_qing_e', 's_qing_e2', 's_qing_e3', 's_qing_e4',
           's_qing_f0', 's_qing_f',
         ]);
         const jpOccSet = new Set([
           's_qing_g0', 's_qing_g',
           's_roc_a0', 's_roc_w1', 's_roc_w2', 's_roc_w3', 's_roc_w3b', 's_roc_w4',
-          's_roc_a', 's_roc_b0', 's_roc',
+          's_roc_a', 's_roc_b0', 's_roc', 's_roc_1938',
         ]);
         const rocPost45Set = new Set(['s_roc_c', 's_roc_d']);
         const ptInShape = sandbox.window.MercatorProjector.pointInShape;
@@ -2447,7 +2636,7 @@ async function runSearchRuntimeSuite(ctx) {
       ['s_ming_0a', '明', 4],
       ['s_ming_0b', '明', 4],
       ['s_sui_d', '魏（李密）', 1],
-      ['s_tang_0', '梁（萧铣）', 2],
+      ['s_tang_0', '梁（萧铣）', 3],
       ['s_tang_0', '吴（杜伏威）', 2],
       ['s_tang_d1', '大齐（黄巢）', 2],
     ]) {
@@ -2460,6 +2649,22 @@ async function runSearchRuntimeSuite(ctx) {
     assert.strictEqual(ctrl._resolveSnapKey(qinDyn, -209), 's_qin_c', 'Qin at -209 BCE must resolve to s_qin_c');
     assert.strictEqual(ctrl._resolveSnapKey(qinDyn, -207), 's_qin_d', 'Qin at -207 BCE must resolve to s_qin_d');
     assert.strictEqual(ctrl._resolveSnapKey(qinDyn, -206), 's_qin_chuhan', 'Qin at -206 BCE must resolve to s_qin_chuhan');
+    const nansongDyn = dynasties.find((d) => d.key === 'nansong');
+    for (const [yr, expectedSnap] of [
+      [1234, 's_nansong_e0'],
+      [1246, 's_nansong_e0'],
+      [1247, 's_nansong_e'],
+      [1270, 's_nansong_b'],
+      [1271, 's_nansong_f'],
+      [1275, 's_nansong_f'],
+      [1276, 's_nansong_g'],
+    ]) {
+      assert.strictEqual(
+        ctrl._resolveSnapKey(nansongDyn, yr),
+        expectedSnap,
+        `Southern Song at ${yr} must resolve to ${expectedSnap}`
+      );
+    }
     assert(
       snapshots.s_qin_c.polities.some((p) => p.title === '秦') &&
         snapshots.s_qin_c.polities.some((p) => p.title === '楚（张楚 · 怀王）') &&
@@ -2539,6 +2744,92 @@ async function runSearchRuntimeSuite(ctx) {
       !cellMob.classList.contains('is-compact') && cellMob.classList.contains('is-narrow'),
       'Mobile ultra-narrow dynasty cell (9px) must hide cleanly via .is-narrow'
     );
+
+    // First-screen & China mobile GFW resilience regression guards:
+    // 1) stylesheet precedes JSON-LD; zero external <script defer> or immediate Google Fonts connections; mobile relief exists
+    const mobReliefPath = path.join(ROOT, 'assets', 'terrain_relief_mobile.webp');
+    assert(
+      indexHtml.indexOf('css/style.css') < indexHtml.indexOf('application/ld+json') &&
+        !/<script\b[^>]*\bdefer\b[^>]*\bsrc=["']https?:/i.test(indexHtml) &&
+        !/\shref="https:\/\/fonts\.googleapis\.com/.test(indexHtml) &&
+        !/\shref="https:\/\/fonts\.gstatic\.com/.test(indexHtml) &&
+        !indexHtml.includes("relief.fetchPriority = 'low'") &&
+        fs.existsSync(mobReliefPath) &&
+        fs.statSync(mobReliefPath).size < 150 * 1024,
+      'index.html must never block DOMContentLoaded on external <script defer>, must defer Google Fonts via data-font-href, and must ship <150 KB terrain_relief_mobile.webp'
+    );
+    // 2) _restoreFromQuery on Chinese ?person=sushi or ?year=741&place=长安 must NOT fetch i18n_dict.js or zh_hant.js
+    {
+      const savedLoc = sandbox.location;
+      const savedHasEn = ctrl._hasEnDict;
+      const savedHasHant = ctrl._hasZhHant;
+      const savedEnsureEn = ctrl._ensureEnglishLocale;
+      const savedEnsureHant = ctrl._ensureZhHant;
+      const savedOpenPerson = ctrl.openPersonChronicle;
+      const savedLocate = ctrl.locate;
+      const savedArmUrl = ctrl._armUrlSync;
+      const savedSetTimeout = sandbox.setTimeout;
+      let enFetches = 0;
+      let hantFetches = 0;
+      try {
+        sandbox.setTimeout = () => 0;
+        ctrl.locale = 'zh';
+        ctrl._hasEnDict = () => false;
+        ctrl._hasZhHant = () => false;
+        ctrl._ensureEnglishLocale = () => {
+          enFetches++;
+          return Promise.resolve();
+        };
+        ctrl._ensureZhHant = () => {
+          hantFetches++;
+          return Promise.resolve();
+        };
+        ctrl.openPersonChronicle = () => {};
+        ctrl.locate = () => {};
+        ctrl._armUrlSync = () => {};
+        sandbox.location = { ...savedLoc, search: '?person=sushi' };
+        ctrl._restoreFromQuery();
+        assert.strictEqual(
+          enFetches + hantFetches,
+          0,
+          `Chinese ?person=sushi must not fetch i18n_dict.js (${enFetches}) or zh_hant.js (${hantFetches})`
+        );
+        sandbox.location = { ...savedLoc, search: '?year=741&place=%E9%95%BF%E5%AE%89' };
+        ctrl._restoreFromQuery({ skipLinkedYearJump: true });
+        assert.strictEqual(
+          enFetches + hantFetches,
+          0,
+          `Simplified Chinese ?year=741&place=长安 must not fetch i18n_dict.js (${enFetches}) or zh_hant.js (${hantFetches})`
+        );
+        // Mixed/Traditional query whose prefix ("南京") would otherwise substring-match modern Nanjing
+        // must still fetch zh_hant.js so "南京應天府" resolves accurately to Northern Song Shangqiu.
+        const savedZhHantGlobal = sandbox.window.ZH_HANT_CONV;
+        delete sandbox.window.ZH_HANT_CONV;
+        ctrl._resolvePlaceCache = new Map();
+        try {
+          sandbox.location = { ...savedLoc, search: '?year=1100&place=%E5%8D%97%E4%BA%AC%E6%87%89%E5%A4%A9%E5%BA%9C' };
+          ctrl._restoreFromQuery({ skipLinkedYearJump: true });
+          assert.strictEqual(
+            hantFetches,
+            1,
+            'Traditional ?year=1100&place=南京應天府 must fetch zh_hant.js instead of settling on substring "南京"'
+          );
+        } finally {
+          sandbox.window.ZH_HANT_CONV = savedZhHantGlobal;
+          ctrl._resolvePlaceCache = new Map();
+        }
+      } finally {
+        sandbox.location = savedLoc;
+        ctrl._hasEnDict = savedHasEn;
+        ctrl._hasZhHant = savedHasHant;
+        ctrl._ensureEnglishLocale = savedEnsureEn;
+        ctrl._ensureZhHant = savedEnsureHant;
+        ctrl.openPersonChronicle = savedOpenPerson;
+        ctrl.locate = savedLocate;
+        ctrl._armUrlSync = savedArmUrl;
+        sandbox.setTimeout = savedSetTimeout;
+      }
+    }
 
     // 6-era boundary & gap regression checks (195 Donghan, 322 Dongjin, 676 Tang, 1410 Ming, 1650 Qing, 1918 ROC)
     const ptIn = sandbox.window.MercatorProjector.pointInShape;
@@ -2630,11 +2921,27 @@ async function runSearchRuntimeSuite(ctx) {
       const text316 = html316.replace(/<[^>]+>/g, '');
       assert.strictEqual(
         text316,
-        '据《资治通鉴》卷89、卷91 《晋书》卷108',
-        'xijin:316 source line merges repeated chapters per work, in citation order'
+        '据《资治通鉴》卷89、91 《晋书》卷108',
+        'xijin:316 source line omits repeated 卷 per work, in citation order'
       );
       assert(!html316.includes('<a '), 'the line is plain text: Wikisource is unreachable for many readers');
       assert.strictEqual(ctrl._milestoneSourceHtml(undefined), '', 'a milestone without sources gets no line');
+
+      assert.strictEqual(
+        ctrl._milestoneSourceHtml(data['tang:686']).replace(/<[^>]+>/g, ''),
+        '据《资治通鉴》卷201、202、204 《新唐书》卷221上 等',
+        'tang:686 source line caps display to 2 works with trailing 等'
+      );
+      assert.strictEqual(
+        ctrl._milestoneSourceText(data['tang:686']),
+        '据《资治通鉴》卷201、202、204 《新唐书》卷221上 《全唐文》卷219 《旧唐书》卷93 《唐会要》卷73',
+        'tang:686 plain-text source preserves full work list for hover tooltip'
+      );
+      assert.strictEqual(
+        ctrl._milestoneSourceHtml(data['sanguo:280']).replace(/<[^>]+>/g, ''),
+        '据《晋书》卷3、42 《三国志》卷48 等',
+        'sanguo:280 source line caps display to 2 works with trailing 等'
+      );
 
       const xijin = dynasties.find((d) => d.key === 'xijin');
       const lineNode = () => ({
@@ -2644,18 +2951,25 @@ async function runSearchRuntimeSuite(ctx) {
           this.parent.kids.splice(this.parent.kids.indexOf(this), 1);
         },
       });
-      // Array.from keeps the mocks in this realm; sandbox arrays fail deepStrictEqual on prototype.
-      const lis = Array.from(xijin.milestones, () => ({
-        kids: [],
-        appendChild(n) {
-          n.parent = this;
-          this.kids.push(n);
-        },
-      }));
-      const listEl = {
-        children: lis,
-        querySelectorAll: () => lis.flatMap((li) => li.kids.filter((k) => k.className === 'ev-src')),
+      const makeListEl = (dyn) => {
+        // Array.from keeps the mocks in this realm; sandbox arrays fail deepStrictEqual on prototype.
+        const rows = Array.from(dyn.milestones, () => ({
+          kids: [],
+          appendChild(n) {
+            n.parent = this;
+            this.kids.push(n);
+          },
+        }));
+        return {
+          rows,
+          el: {
+            children: rows,
+            querySelectorAll: () => rows.flatMap((li) => li.kids.filter((k) => k.className === 'ev-src')),
+          },
+        };
       };
+      const { rows: lis, el: listEl } = makeListEl(xijin);
+      let activeListEl = listEl;
       const saved = {
         _id: ctrl._id,
         locale: ctrl.locale,
@@ -2666,7 +2980,7 @@ async function runSearchRuntimeSuite(ctx) {
         sources: sandbox.window.ATLAS_MILESTONE_SOURCES,
       };
       try {
-        ctrl._id = (id) => (id === 'milestone-list' ? listEl : saved._id.call(ctrl, id));
+        ctrl._id = (id) => (id === 'milestone-list' ? activeListEl : saved._id.call(ctrl, id));
         sandbox.document = { ...(saved.document || {}), createElement: lineNode };
         sandbox.window.ATLAS_MILESTONE_SOURCES = data;
         ctrl.activePolity = null;
@@ -2677,6 +2991,8 @@ async function runSearchRuntimeSuite(ctx) {
         ctrl.year = 316;
         ctrl._syncMilestoneSource(xijin);
         assert.deepStrictEqual(linesAt(), [316], 'zh: exactly the highlighted milestone carries the source line');
+        const src316Node = lis.find((li) => li.kids.length).kids[0];
+        assert(!src316Node.title, 'xijin:316 (<=2 works) omits redundant hover tooltip title');
         ctrl.year = 313;
         ctrl._syncMilestoneSource(xijin);
         assert.deepStrictEqual(linesAt(), [313], 'moving the highlight moves the line instead of adding another');
@@ -2687,6 +3003,39 @@ async function runSearchRuntimeSuite(ctx) {
         ctrl.activePolity = { key: 'nantang' };
         ctrl._syncMilestoneSource(xijin);
         assert.deepStrictEqual(linesAt(), [], 'polity focus lists related events, not milestones: no line');
+
+        // >2 works attaches full citation text to .ev-src title for hover inspection
+        ctrl.activePolity = null;
+        const tang = dynasties.find((d) => d.key === 'tang');
+        const { rows: tangRows, el: tangListEl } = makeListEl(tang);
+        activeListEl = tangListEl;
+        ctrl.year = 686;
+        ctrl._syncMilestoneSource(tang);
+        const src686Node = tangRows.flatMap((li) => li.kids)[0];
+        assert(src686Node, 'tang:686 attaches an .ev-src node');
+        assert.strictEqual(
+          src686Node.title,
+          ctrl._milestoneSourceText(data['tang:686']),
+          'tang:686 (>2 works) sets full citation list on .ev-src title'
+        );
+        activeListEl = listEl;
+
+        // Discussion #438 regression: an explicitly opened non-chronicle landmark event (idx === -1)
+        // must not fall back to highlighting the preceding chronicle milestone.
+        ctrl.activePolity = null;
+        ctrl.year = 646;
+        ctrl.activeMilestone = {
+          dynastyKey: 'tang',
+          milestone: { year: 646, headline: '参天可汗道', site: '回鹘' },
+          idx: -1,
+          year: 646,
+          isAuto: false,
+        };
+        assert.strictEqual(
+          ctrl._activeMilestoneIndex(tang),
+          -1,
+          'Explicit non-chronicle landmark event (idx === -1) must not highlight an earlier chronicle milestone (#438)'
+        );
       } finally {
         ctrl._id = saved._id;
         ctrl.locale = saved.locale;
@@ -2817,11 +3166,30 @@ async function runSearchRuntimeSuite(ctx) {
         'The 230 BCE fall of Han must carry the [始末] entry for the Qin unification storyline'
       );
 
+      const changzhengProf = ctrl._resolvePersonProfile('changzheng');
+      assert(
+        changzhengProf && changzhengProf.isStory === true && Array.isArray(changzhengProf.stops) && changzhengProf.stops.length === 10,
+        'changzheng must resolve as an Event Storyline (isStory: true) with 10 chronological stops'
+      );
+      for (const sq of ['红军长征', '长征', '四渡赤水', '飞夺泸定桥', 'changzheng', 'Long March']) {
+        const sqHits = ctrl._queryQuickSearch(sq);
+        assert(
+          sqHits.length > 0 && sqHits[0].kind === 'story' && sqHits[0].storyKey === 'changzheng',
+          `Quick search for "${sq}" must surface the Long March storyline (kind="story") at index 0`
+        );
+      }
+      const rocDyn = dynasties.find((d) => d.key === 'roc');
+      assert.strictEqual(
+        ctrl._findStoryForMilestone(rocDyn, rocDyn.milestones.find((m) => m.year === 1935))?.key,
+        'changzheng',
+        'The 1935 Zunyi Conference milestone must carry the [始末] entry for the Long March storyline'
+      );
+
       // Universal Event Storyline (`isStory: true`) invariants:
       // 1) Must declare `dynastyKey` and a 2-char Chinese stem alias searchable as `kind: "story"`.
       // 2) Must map to EXACTLY ONE `[始末]` milestone across all dynasties in `_findStoryForMilestone`.
       const allStoryProfiles = (loreData.PERSON_PROFILES || []).filter((p) => p && p.isStory);
-      assert(allStoryProfiles.length >= 4, 'Expected at least 4 Event Storylines (anshi, jingkang, qintongyi, chuhan)');
+      assert(allStoryProfiles.length >= 5, 'Expected at least 5 Event Storylines (anshi, jingkang, qintongyi, chuhan, changzheng)');
       for (const sp of allStoryProfiles) {
         assert(
           typeof sp.dynastyKey === 'string' && dynasties.some((d) => d.key === sp.dynastyKey),
@@ -3062,7 +3430,129 @@ async function runSearchRuntimeSuite(ctx) {
             ) === null,
           'Non-journey scraped solo events separated by >6 years must suppress misleading cross-country trajectory arrows'
         );
+        const wudiOvThreads = recordedSvg.filter(
+          (n) =>
+            n.tag === 'path' &&
+            String(n.attrs.class || '').includes('journey-track-thread is-overview')
+        );
+        assert.strictEqual(
+          wudiOvThreads.length,
+          0,
+          'Scraped non-journey solo profiles (e.g. hanwudi, caocao) must stay pins-only in overview mode to prevent decree fly-lines and warlord cobwebs'
+        );
         ctrl.closeGenealogyCard();
+
+        // Curated journeys & relics (journeyKey || isRelic):
+        // 1. Co-located same-city stops must not use manual coordinate jitter (>= 0.08 deg)
+        // 2. Overview mode must render a continuous .journey-track-thread.is-overview path
+        // 3. Every overview segment start/end point must snap within < 0.35px of a visible .journey-node pin center
+        // 4. Region-line dimming (.has-person-overview-lines) must never dim .region-caption labels
+        assert(
+          cssSrc.includes('#viewport-frame.has-person-overview-lines .region-shape') &&
+            !/#viewport-frame\.has-(?:active-person|person-overview-lines)[^{]*\.region-caption/.test(
+              cssSrc
+            ),
+          'Overview region-border softening (.has-person-overview-lines) must not dim .region-caption text'
+        );
+        const curatedProfiles = ControllerClass.PERSON_PROFILES.filter(
+          (p) => !p.isStory && (p.journeyKey || p.isRelic)
+        );
+        assert(
+          curatedProfiles.length >= 7,
+          'Expected at least 7 curated journey/relic profiles'
+        );
+        for (const cp of curatedProfiles) {
+          const jStops = Array.isArray(cp.stops)
+            ? cp.stops
+            : (
+                ControllerClass.HISTORICAL_JOURNEYS.find((j) => j.key === cp.journeyKey) || {}
+              ).stops || [];
+          for (let i = 0; i < jStops.length; i++) {
+            const baseA = String(jStops[i].ancientZh || '')
+              .replace(/\s*[（(][^）)]*[）)]\s*/g, '')
+              .trim();
+            for (let j = i + 1; j < jStops.length; j++) {
+              const baseB = String(jStops[j].ancientZh || '')
+                .replace(/\s*[（(][^）)]*[）)]\s*/g, '')
+                .trim();
+              if (baseA && baseA === baseB) {
+                const dist = Math.hypot(
+                  jStops[i].coord[0] - jStops[j].coord[0],
+                  jStops[i].coord[1] - jStops[j].coord[1]
+                );
+                assert(
+                  dist < 0.08,
+                  `Curated journey "${cp.key}" co-city stops "${baseA}" (#${i + 1} vs #${j + 1}) must share canonical coordinates (<0.08 deg, got ${dist.toFixed(3)}) so concentric stack rings and trajectory endpoints stay aligned`
+                );
+              }
+            }
+            if (Array.isArray(jStops[i].via)) {
+              for (const wp of jStops[i].via) {
+                assert(
+                  Array.isArray(wp) &&
+                    wp.length === 2 &&
+                    wp[0] >= 60 &&
+                    wp[0] <= 135 &&
+                    wp[1] >= 15 &&
+                    wp[1] <= 55,
+                  `Curated journey "${cp.key}" stop #${i + 1} has invalid via waypoint [${wp}]`
+                );
+              }
+            }
+          }
+          // Closed-loop Western Regions journeys returning to Chang'an (zhangqian, xuanzang) must separate outbound & inbound corridors
+          if (
+            jStops.length >= 4 &&
+            Math.hypot(
+              jStops[0].coord[0] - jStops[jStops.length - 1].coord[0],
+              jStops[0].coord[1] - jStops[jStops.length - 1].coord[1]
+            ) < 0.08
+          ) {
+            const retVia = jStops[jStops.length - 1].via || [];
+            assert(
+              retVia.length >= 2 && retVia[retVia.length - 1][1] < jStops[1].coord[1] - 0.5,
+              `Closed-loop journey "${cp.key}" final return leg must define >=2 via waypoints separated south of outbound stop #2`
+            );
+          }
+
+          recordedSvg.length = 0;
+          ctrl.openPersonChronicle(cp.key, -1);
+          const ovThreads = recordedSvg.filter(
+            (n) =>
+              n.tag === 'path' &&
+              String(n.attrs.class || '').includes('journey-track-thread is-overview')
+          );
+          assert.strictEqual(
+            ovThreads.length,
+            1,
+            `Curated journey "${cp.key}" in overview mode must render a continuous .journey-track-thread.is-overview path`
+          );
+          const pinPts = recordedSvg
+            .filter((n) => n.tag === 'g' && String(n.attrs.class || '').includes('journey-node'))
+            .map((n) => [parseFloat(n.attrs['data-x']), parseFloat(n.attrs['data-y'])]);
+          const dStr = String(ovThreads[0].attrs.d || '');
+          const moveMatches = [...dStr.matchAll(/M(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)/g)];
+          assert(moveMatches.length >= 3, `Curated journey "${cp.key}" must have >= 3 overview trajectory legs`);
+          for (const m of moveMatches) {
+            const mx = parseFloat(m[1]);
+            const my = parseFloat(m[2]);
+            assert(
+              pinPts.some(([px, py]) => Math.hypot(px - mx, py - my) < 0.35),
+              `Curated journey "${cp.key}" overview segment start (${mx},${my}) must snap to a visible .journey-node center`
+            );
+          }
+          const subSegs = dStr.split(/(?=M-?\d)/).filter(Boolean);
+          for (const segD of subSegs) {
+            const nums = [...segD.matchAll(/-?\d+(?:\.\d+)?/g)].map((x) => parseFloat(x[0]));
+            const ex = nums[nums.length - 2];
+            const ey = nums[nums.length - 1];
+            assert(
+              pinPts.some(([px, py]) => Math.hypot(px - ex, py - ey) < 0.35),
+              `Curated journey "${cp.key}" overview segment end (${ex},${ey}) must snap to a visible .journey-node center (no dangling arrowhead)`
+            );
+          }
+          ctrl.closeGenealogyCard();
+        }
       } finally {
         ctrl.locale = prevLoc;
         ctrl._svgNode = prevSvgNode;
@@ -3250,6 +3740,95 @@ async function runSearchRuntimeSuite(ctx) {
         'A disabled tracker must not touch the controller'
       );
     }
+  }
+
+  // CUJ 46: Default-View Reset Camera Auto-Hide, Topic Link Affordance & Desktop-Split / Mobile-Merged Header Menu
+  {
+    assert(
+      !indexHtml.includes('github-pill-group') &&
+        indexHtml.includes('id="act-github-star"') &&
+        indexHtml.includes('id="act-more-menu"') &&
+        indexHtml.includes('more-menu-btn') &&
+        indexHtml.includes('id="lnk-more-github"') &&
+        indexHtml.includes('more-mobile-only') &&
+        /<a id="lnk-dynasty-topic"[^>]*>图志<\/a>/.test(indexHtml),
+      'index.html must split #act-github-star and #act-more-menu on desktop, merge #lnk-more-github into #more-popover on mobile, and keep #lnk-dynasty-topic text clean without arrows'
+    );
+    assert(
+      cssSrc.includes('#viewport-frame.is-camera-moved .canvas-reset-btn') &&
+        cssSrc.includes('.more-pop-link.more-mobile-only'),
+      'css/style.css must gate #act-reset-camera visibility via .is-camera-moved and show .more-mobile-only menu items on <= 640px mobile'
+    );
+
+    const toggled = new Set();
+    const vpStub = {
+      classList: {
+        contains: (c) => toggled.has(c),
+        add: (...items) => items.forEach((c) => toggled.add(c)),
+        remove: (...items) => items.forEach((c) => toggled.delete(c)),
+        toggle: (c, force) => {
+          const on = force === undefined ? !toggled.has(c) : Boolean(force);
+          if (on) toggled.add(c);
+          else toggled.delete(c);
+          return on;
+        },
+      },
+    };
+    const proto = Object.getPrototypeOf(ctrl);
+    const camCtrl = Object.assign(Object.create(proto), {
+      viewportFrame: vpStub,
+      _stageWrap: null,
+      svg: {
+        classList: { add() {}, remove() {}, contains: () => false },
+        setAttribute() {},
+      },
+      hoverTip: { classList: { add() {}, remove() {} } },
+      _cancelPendingHover() {},
+      _clearHoveredPrefecture() {},
+      _getUnscaledSvgRect: () => ({ left: 0, top: 0, width: 1200, height: 840 }),
+      _rescaleSvgTypography() {},
+      _updateScaleBar() {},
+      _scheduleTerrainTiles() {},
+      _id: () => null,
+      _syncMobileOverlayState() {},
+      activeMilestone: null,
+      activeCustomRoute: null,
+      flyRaf: null,
+      _camRaf: null,
+      _lastCameraViewBox: null,
+    });
+    camCtrl.camera = camCtrl._getDefaultCamera();
+    camCtrl._applyCamera(true);
+    assert.strictEqual(
+      toggled.has('is-camera-moved'),
+      false,
+      'Reset camera button must remain hidden on initial default camera'
+    );
+
+    camCtrl.camera = { ...camCtrl._getDefaultCamera(), w: 300, h: 252, zoom: 1000 / 300 };
+    camCtrl._applyCamera(false);
+    clearTimeout(camCtrl._cameraSettleTimer);
+    assert.strictEqual(
+      toggled.has('is-camera-moved'),
+      true,
+      'Zooming away from default camera must reveal #act-reset-camera via .is-camera-moved'
+    );
+
+    camCtrl.camera = camCtrl._getDefaultCamera();
+    camCtrl.activeCustomRoute = [{ ancient: '长安' }];
+    camCtrl._syncResetCameraUi();
+    assert.strictEqual(
+      toggled.has('is-camera-moved'),
+      true,
+      'An active custom route must keep #act-reset-camera visible even when camera matches default bounds'
+    );
+
+    camCtrl.clearCustomRoute();
+    assert.strictEqual(
+      toggled.has('is-camera-moved'),
+      false,
+      'Clearing an active custom route while at default camera must hide #act-reset-camera'
+    );
   }
 }
 

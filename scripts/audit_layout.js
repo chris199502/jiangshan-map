@@ -105,6 +105,10 @@ window.addEventListener('load', () => {
       searchBox: rectOf('#map-search-box'),
       mapKey: rectOf('#map-key'),
       brDock: rectOf('#canvas-br-dock'),
+      mapControls: rectOf('.map-view-controls'),
+      locationButton: rectOf('#act-user-location'),
+      resetButton: rectOf('#act-reset-camera'),
+      cameraMoved: document.querySelector('#viewport-frame').classList.contains('is-camera-moved'),
       scrubberDock: rectOf('#scrubber-dock'),
       playbackGroup: rectOf('.playback-controls-group'),
       yearStepper: rectOf('.year-stepper'),
@@ -143,6 +147,12 @@ window.addEventListener('load', () => {
       ctrl.jumpToYear(692);
       states.longEra692 = snapshotState();
     }
+
+    const frame = document.querySelector('#viewport-frame');
+    frame.classList.remove('is-camera-moved');
+    states.controlsAtRest = snapshotState();
+    frame.classList.add('is-camera-moved');
+    states.controlsMoved = snapshotState();
 
     const out = document.createElement('script');
     out.id = 'atlas-layout-probe-json';
@@ -214,6 +224,13 @@ function verifyViewportStates(label, width, height, states) {
     assert(st.track && st.track.width > 100 && st.track.height >= 26, `${ctx}: #scrubber-track invalid rect ${JSON.stringify(st.track)}`);
     assert(st.edgeStart && st.edgeEnd, `${ctx}: missing timeline edge handles`);
 
+    if (!st.cameraMoved) {
+      assert(st.resetButton.width === 0 && st.resetButton.height === 0, `${ctx}: hidden reset button must not leave an empty slot in grouped map controls`);
+      assert(Math.abs(st.mapControls.width - st.locationButton.width) <= 1 && Math.abs(st.mapControls.height - st.locationButton.height) <= 1, `${ctx}: resting map controls must fit the location button`);
+    } else {
+      assert(st.resetButton.width > 0 && st.resetButton.height > 0, `${ctx}: moved camera must expose the reset button`);
+    }
+
     assert(st.pageWidth <= st.pageViewportWidth, `${ctx}: page overflows horizontally (${st.pageWidth}px)`);
     assert(st.yearsAgo && st.yearsAgo.width > 0 && st.yearsAgo.height >= 14, `${ctx}: years-ago line must be visible`);
     assert(st.yearsAgo.bottom < st.track.top, `${ctx}: years-ago line must clear the timeline`);
@@ -249,6 +266,10 @@ function verifyViewportStates(label, width, height, states) {
       assert(
         !boxesOverlap(st.bubble, st.yearStepper, 1),
         `${ctx}: mobile #scrubber-Bubble (${JSON.stringify(st.bubble)}) overlaps .year-stepper (${JSON.stringify(st.yearStepper)})`
+      );
+      assert(
+        st.edgeStart.left >= 14 && st.edgeEnd.right <= width - 14,
+        `${ctx}: mobile timeline edge handles (${st.edgeStart.left}..${st.edgeEnd.right}) sit too close to screen edge (< 14px)`
       );
     } else {
       // A zoomed track extends beyond its viewport; the bubble stays at the visible edge.

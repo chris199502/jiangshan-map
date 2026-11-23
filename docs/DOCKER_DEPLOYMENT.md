@@ -4,6 +4,8 @@
 
 这是纯静态网页，无需 npm 安装或构建。现有共享 Caddy 容器直接读取网页文件，负责 HTTPS、压缩和证书续期。已移除独立 Nginx 容器、`nginx:stable-alpine` 镜像、旧项目 Compose 文件和 `deploy/nginx.conf`；不再使用本机端口 `18766`。
 
+本分叉保留已生成并提交的 `topics/*.html`。上游虽改为部署时生成专题页，本分叉在维护阶段运行 `node scripts/build_seo_topics.js` 并提交结果，因此服务器拉取后仍可直接访问专题，无需安装 Node.js 或启动 Dockerfile 中的 Nginx 镜像。
+
 ## 部署文件与公开范围
 
 - `/srv/caddy/compose.yaml` 管理服务器现有的共享 Caddy 容器。

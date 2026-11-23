@@ -30,6 +30,8 @@
 
 不修改历史数据，不增加运行时依赖，也不设置自动同步任务。
 
+上游 v1.4.0 后将 `topics/*.html` 改为部署时生成。本分叉继续提交生成后的专题 HTML，以兼容共享 Caddy 在 `git pull` 后直接提供静态文件的部署方式。同步上游或修改专题数据后，运行 `node scripts/build_seo_topics.js` 并提交 `topics/` 的生成结果；运行 `node scripts/build_seo_topics.js --check` 和 `node scripts/audit_topics.js --check` 验证。保留 `.gitignore` 中的分叉例外，不要忽略这些 HTML。
+
 通过现有 Caddy 直接部署见 [DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md)。合并上游时须保留 `deploy/Caddyfile`、`deploy/caddy-mount.yaml`、公开路径白名单和该部署文档。站点由共享 Caddy 容器直接提供静态文件，已移除独立 Nginx 容器及原 `compose.yaml`、`deploy/nginx.conf`；不要在同步上游时恢复旧部署。仅更新网页资源时无需重建或重载 Caddy，不覆盖服务器其他站点配置。
 
 ## 我的位置

@@ -8,3 +8,5 @@ _snap_skill_tmp_*.html
 /geojson/*
 !/geojson/demo.html
 !/geojson/jiangshan-locate.js
+
+# This Caddy fork commits generated topics/*.html for direct static deployment.

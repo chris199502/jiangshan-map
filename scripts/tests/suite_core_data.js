@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const { verifyIndexHtmlAssetHashes } = require('../sync_version');
+const { generateAllOutputs } = require('../build_seo_topics');
 
 async function runCoreDataSuite(ctx) {
   const {
@@ -424,13 +425,11 @@ async function runCoreDataSuite(ctx) {
     bootSnaps &&
       Array.isArray(bootSnaps.neighbors) &&
       bootSnaps.s_zhanguo_a &&
-      bootSnaps.s_qin_a &&
+      !bootSnaps.s_qin_a &&
       (FAST_MODE
-        ? bootSnaps.s_zhanguo_a.polities.length === snapshots.s_zhanguo_a.polities.length &&
-          bootSnaps.s_qin_a.prefectures.length === snapshots.s_qin_a.prefectures.length
-        : JSON.stringify(bootSnaps.s_zhanguo_a) === JSON.stringify(snapshots.s_zhanguo_a) &&
-          JSON.stringify(bootSnaps.s_qin_a) === JSON.stringify(snapshots.s_qin_a)),
-    'atlas_boot.js must provide neighbors, s_zhanguo_a, and s_qin_a identical to atlas_snapshots.js for instant first paint'
+        ? bootSnaps.s_zhanguo_a.polities.length === snapshots.s_zhanguo_a.polities.length
+        : JSON.stringify(bootSnaps.s_zhanguo_a) === JSON.stringify(snapshots.s_zhanguo_a)),
+    'atlas_boot.js must provide neighbors and s_zhanguo_a identical to atlas_snapshots.js without retired s_qin_a bloat'
   );
   if (!FAST_MODE) {
     verifyShape(bootSnaps.s_zhanguo_a.polities[0].shape, 'boot.s_zhanguo_a.polities[0]');
@@ -505,15 +504,27 @@ async function runCoreDataSuite(ctx) {
       !appCode.toLowerCase().includes('deanchensj.github.io'),
     'SEO/GEO files (index.html, sitemap.xml, robots.txt, app.js) must canonicalize to https://deanchen.me/jiangshan-map/ and allow Baiduspider/Bytespider'
   );
-  const topicsDir = path.join(ROOT, 'topics');
+  const generatedTopicMap = new Map(
+    generateAllOutputs().allTopicPages.map((p) => [p.filename, p.html])
+  );
   assert(
-    fs.existsSync(path.join(topicsDir, 'index.html')),
-    'Missing topics/index.html static SEO directory page'
+    generatedTopicMap.has('index.html'),
+    'Missing topics/index.html static SEO directory page in generator output'
+  );
+  const placesCatalog = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'data/topics/places.json'), 'utf8')
   );
   const expectedTopicFiles = [
     'index.html',
+    'persons.html',
+    'places.html',
     ...dynasties.map((d) => `${d.key}.html`),
+    ...(loreData.PERSON_PROFILES || []).filter((p) => p && p.isStory).map((s) => `story-${s.key}.html`),
     ...loreData.HISTORICAL_JOURNEYS.map((j) => `journey-${j.key}.html`),
+    ...(loreData.PERSON_PROFILES || [])
+      .filter((p) => p && !p.isStory && !p.journeyKey && (p.isRelic || (p.evCount || 0) >= 5))
+      .map((p) => `person-${p.key}.html`),
+    ...placesCatalog.map((pl) => `place-${pl.slug}.html`),
     'dufu-763.html',
     'sushi-exile.html',
     'wentianxiang-lingdingyang.html',
@@ -525,20 +536,23 @@ async function runCoreDataSuite(ctx) {
     'battle-feishui.html',
   ];
   for (const tf of expectedTopicFiles) {
-    const tfPath = path.join(topicsDir, tf);
-    assert(fs.existsSync(tfPath), `Missing static SEO topic page: topics/${tf}`);
-    const tfHtml = fs.readFileSync(tfPath, 'utf8');
+    const tfHtml = generatedTopicMap.get(tf);
+    assert(typeof tfHtml === 'string' && tfHtml.length > 0, `Missing static SEO topic page: topics/${tf}`);
     const expectedCanon = `https://deanchen.me/jiangshan-map/topics/${tf}`;
     assert(
       tfHtml.includes(`rel="canonical" href="${expectedCanon}"`) &&
         tfHtml.includes('application/ld+json') &&
+        (tf === 'index.html' ||
+          tf === 'persons.html' ||
+          tf === 'places.html' ||
+          tfHtml.includes('../?embed=1&')) &&
         !tfHtml.toLowerCase().includes('deanchensj.github.io') &&
         !tfHtml.includes('undefined') &&
         !tfHtml.includes('NaN') &&
         !/\b(zhanguo|xihan|donghan|sanguo|xijin|dongjin|nanbei|wudai|beisong|nansong|roc|prc)\s+Historical/i.test(tfHtml) &&
         sitemapXml.includes(`<loc>${expectedCanon}</loc>`) &&
         indexHtml.includes(expectedCanon),
-      `Static topic page topics/${tf} must have canonical ${expectedCanon}, JSON-LD, zero undefined/NaN, clean English naming, and be linked in sitemap.xml and index.html`
+      `Static topic page topics/${tf} must have canonical ${expectedCanon}, JSON-LD, ?embed=1 preview iframe, zero undefined/NaN, clean English naming, and be linked in sitemap.xml and index.html`
     );
   }
   verifyIndexHtmlAssetHashes(ROOT, indexHtml, appCode);
@@ -712,7 +726,6 @@ async function runCoreDataSuite(ctx) {
     '_spokenSiteIfAbsent',
     '_cleanSpokenText',
     '_candidateSpeechVoices',
-    '_selectSpeechVoice',
     '_duckMusicForNarration',
     '_updateNarratorUi',
     '_isMajorStopYear',

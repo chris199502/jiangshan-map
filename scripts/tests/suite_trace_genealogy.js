@@ -335,6 +335,25 @@ async function runTraceGenealogySuite(ctx) {
       mockLoreEl.innerHTML.includes('雄关形胜'),
     `Expected #genealogy-lore at Hangu Pass to render Strategic Pass banner, got ${mockLoreEl.innerHTML}`
   );
+  // A site with one entry per name (江宁 → 天京 → 江宁, 承天府 → 台湾府) shows the entry on the map that year.
+  const prevYearGen = ctrl.year;
+  const prevDynastyIdxGen = ctrl.dynastyIdx;
+  for (const [yr, lng, lat, shown, hidden] of [
+    [1860, 118.801, 32.061, '邻近古城：天京（即此地）', '邻近古城：江宁'],
+    [1870, 118.801, 32.061, '1864 年湘军攻克天京复置', '1853 年太平军攻占改称天京'],
+    [1670, 120.211, 23.001, '邻近古城：承天府（即此地）', '台湾府（即此地）'],
+  ]) {
+    ctrl.year = yr;
+    ctrl.dynastyIdx = ctrl._findDynastyIndex(yr);
+    ctrl.openGenealogyAt(lng, lat, null, { fromYearSync: true });
+    const yearRowHtml = mockTimelineItems[ctrl.dynastyIdx].innerHTML;
+    assert(
+      yearRowHtml.includes(shown) && !yearRowHtml.includes(hidden),
+      `Expected the ${yr} row at ${lng},${lat} to show ${shown} and not ${hidden}, got ${yearRowHtml}`
+    );
+  }
+  ctrl.year = prevYearGen;
+  ctrl.dynastyIdx = prevDynastyIdxGen;
   const prevLocaleGen = ctrl.locale;
   ctrl.locale = 'en';
   const genSampleSettlements = FAST_MODE
@@ -596,6 +615,7 @@ async function runTraceGenealogySuite(ctx) {
     's_nansong_b0',
     's_nansong_c',
     's_nansong_d',
+    's_nansong_e0',
     's_nansong_e',
   ];
   for (const sk of daliSnapKeys) {
@@ -618,7 +638,7 @@ async function runTraceGenealogySuite(ctx) {
     );
   }
   const tangSnapKeys = Object.keys(snapshots).filter((k) => k.startsWith('s_tang'));
-  assert(tangSnapKeys.length === 29, `Expected 29 s_tang* snapshots, found ${tangSnapKeys.length}`);
+  assert(tangSnapKeys.length === 31, `Expected 31 s_tang* snapshots, found ${tangSnapKeys.length}`);
   // Issue #267. Tang northeast: 平壤 is 安东's seat until 676, never 新罗's before 702;
   // 震国 (698–713) is renamed 渤海 only from 713; 安西 / 北庭 hold oases, not the desert, in 764–790;
   // the Four Garrisons fall to 吐蕃 in 670–679 and 686–692, when 安西 falls back to 西州.
@@ -679,7 +699,7 @@ async function runTraceGenealogySuite(ctx) {
       assert.strictEqual(ownerAt(sk, TENGCHONG), dali, `${sk}: 腾冲 must belong to ${dali}`);
     }
     // 唐 621–738: no 南诏 yet (六诏 + 唐 羁縻 in 滇东); 南诏 from 738.
-    for (const sk of ['s_tang_a0', 's_tang_a', 's_tang_wz1', 's_tang_a5y']) {
+    for (const sk of ['s_tang_a0', 's_tang_a', 's_tang_wz1', 's_tang_a5y', 's_tang_726']) {
       assert(!(snapshots[sk].polities || []).some((p) => p.title === '南诏'), `${sk}: 南诏 must not exist before 738`);
       assert.strictEqual(ownerAt(sk, [100.23, 25.6]), '六诏', `${sk}: 洱海 must belong to 六诏 before 738`);
       assert(['唐', '武周'].includes(ownerAt(sk, [102.71, 25.04])), `${sk}: 昆州 (昆明) must belong to 唐 / 武周 before 738`);
@@ -696,7 +716,7 @@ async function runTraceGenealogySuite(ctx) {
       assert.strictEqual(ownerAt(sk, [102.26, 27.9]), who, `${sk}: 嶲州 (西昌) must belong to ${who}`);
     }
     // 1351–1388: northern 越南 is 大越 / 安南, not blank.
-    for (const sk of ['s_yuan_b', 's_yuan_c', 's_ming_0a', 's_ming_0c', 's_ming_0d']) {
+    for (const sk of ['s_yuan_1351', 's_yuan_b', 's_yuan_c', 's_ming_0a', 's_ming_0c', 's_ming_0d']) {
       assert(ownerAt(sk, [104.5, 22.1]) || (snapshots[sk].polities || []).some((q) => q.role === 'neighbor' && pointInShape(104.5, 22.1, q.shape)), `${sk}: 104.5,22.1 must not be blank`);
     }
     // 东汉–隋: 叶榆 (大理) and 不韦 (保山) are Han counties; 永昌郡 (69 CE) adds 腾冲 for 73–347;
@@ -747,8 +767,8 @@ async function runTraceGenealogySuite(ctx) {
     );
   }
   // 南诏 exists from 738 (before that: 六诏 plus 唐 羁縻 in 滇东; 618–621 爨 · 六诏).
-  const preNanzhao = new Set(['s_tang_0', 's_tang_a0', 's_tang_a1', 's_tang_a1b', 's_tang_a2', 's_tang_a2b', 's_tang_a3', 's_tang_a3b', 's_tang_a4', 's_tang_a4b',
-    's_tang_a6', 's_tang_a', 's_tang_a7', 's_tang_wz0', 's_tang_wz1', 's_tang_wz1b', 's_tang_wz2', 's_tang_a5z', 's_tang_a5y']);
+  const preNanzhao = new Set(['s_tang_0', 's_tang_0b', 's_tang_a0', 's_tang_a1', 's_tang_a1b', 's_tang_a2', 's_tang_a2b', 's_tang_a3', 's_tang_a3b', 's_tang_a4', 's_tang_a4b',
+    's_tang_a6', 's_tang_a', 's_tang_a7', 's_tang_wz0', 's_tang_wz1', 's_tang_wz1b', 's_tang_wz2', 's_tang_a5z', 's_tang_a5y', 's_tang_726']);
   const nzSnapKeys = tangSnapKeys.filter((k) => !preNanzhao.has(k));
   assert.strictEqual(nzSnapKeys.length, tangSnapKeys.length - preNanzhao.size, 'every pre-738 Tang snapshot key must exist');
   for (const sk of nzSnapKeys) {
@@ -1510,6 +1530,34 @@ async function runTraceGenealogySuite(ctx) {
         zhaoEvs.filter((e) => e.year === 961).length === 1,
       `Expected Zhao Kuangyin to have 1 event in 960 (Chenqiao) and 1 in 961 (Cup of Wine), got ${JSON.stringify(zhaoEvs.map((e) => e.year))}`
     );
+    const gaoProfile = loreData.PERSON_PROFILES.find((p) => p.key === 'gaohuan');
+    const ywtProfile = loreData.PERSON_PROFILES.find((p) => p.key === 'yuwentai');
+    const gaoEvs = ctrl._collectPersonEvents(gaoProfile);
+    const gao534 = gaoEvs.find((e) => e.year === 534);
+    assert(
+      gaoEvs.length === 6 &&
+        gao534 &&
+        gao534.siteZh === '邺' &&
+        Math.hypot(gao534.coord[0] - 114.391, gao534.coord[1] - 36.101) < 0.05,
+      `Expected Gao Huan to collect 6 events with 534 CE split to Ye (邺), got ${JSON.stringify(gao534 && { siteZh: gao534.siteZh, coord: gao534.coord })}`
+    );
+    const ywtEvs = ctrl._collectPersonEvents(ywtProfile);
+    const ywtGaoState = ctrl._buildPersonTracksAndEvents([ywtProfile, gaoProfile]);
+    assert(
+      ywtEvs.length === 5 && ywtGaoState && ywtGaoState.sameTimeCount >= 2,
+      `Expected Yuwen Tai (5 stops) x Gao Huan to merge >= 2 contemporaneous encounters, got ${ywtEvs.length} stops / ${ywtGaoState && ywtGaoState.sameTimeCount} encounters`
+    );
+    const sunCeEvs = ctrl._collectPersonEvents(
+      loreData.PERSON_PROFILES.find((p) => p.key === 'sunce')
+    );
+    assert(
+      sunCeEvs.length === 4 &&
+        sunCeEvs[0].year === 195 &&
+        sunCeEvs[0].siteZh.includes('历阳') &&
+        sunCeEvs[1].year === 195 &&
+        sunCeEvs[1].siteZh.includes('曲阿'),
+      `Expected Sun Ce 195 CE events ordered (Liyang -> Qu'a), got ${JSON.stringify(sunCeEvs.map((e) => `${e.year}:${e.siteZh}`))}`
+    );
   }
 
   // CUJ 24: Eastern Jin & Southern-Northern Dynasties Phased Zhou / Qiaozhou & Commandery Evolution
@@ -1813,6 +1861,23 @@ async function runTraceGenealogySuite(ctx) {
           `Expected clean English text & site mentioning "${enName}" on ${pKey}:${st.year}, got "${st.siteEn} -> ${st.textEn}"`
         );
       }
+    }
+
+    // 36. Historical homonym guard: Northern/Southern Song 南京应天府 (Shangqiu) must not match Jiangsu Nanjing
+    for (const dynKey of ['beisong', 'nansong']) {
+      const d = dynasties.find((item) => item.key === dynKey);
+      const njNear = ctrl._findNearestSettlement(d.settlements, 118.801, 32.061, 32);
+      const njEvs = ctrl._collectPlaceEventsForDynasty(d, 118.801, 32.061, njNear);
+      assert(
+        !njEvs.some((e) => (e.milestone && e.milestone.site || '').includes('南京应天府')),
+        `Jiangsu Nanjing (${dynKey}) must not include Shangqiu 南京应天府 events, got ${JSON.stringify(njEvs.map((e) => e.text))}`
+      );
+      const sqNear = ctrl._findNearestSettlement(d.settlements, 115.651, 34.411, 32);
+      const sqEvs = ctrl._collectPlaceEventsForDynasty(d, 115.651, 34.411, sqNear);
+      assert(
+        sqEvs.some((e) => (e.milestone && e.milestone.site || '').includes('南京应天府')),
+        `Shangqiu (${dynKey}) must retain its 南京应天府 event`
+      );
     }
   }
 
